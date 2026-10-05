@@ -43,9 +43,19 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-#: Walk limits.  Accessibility trees on real desktops can run to thousands of
-#: nodes; these bounds keep a diff cheap and keep the result prompt-sized.
-_DEFAULT_MAX_NODES = 400
+#: A node budget a caller can opt into — a result headed for a model's context
+#: cannot be unbounded, and accessibility trees on real desktops do run long
+#: (a 441-element window was measured on Windows).
+#:
+#: Nothing in this module applies it by default, and that is deliberate.  A walk
+#: that quietly stopped at a boundary would answer "did the content change" and
+#: "is this element present" from a window it only partly read — reporting
+#: *unchanged* for an edit past the cut, and *absent* for an element sitting at
+#: position 401.  Callers that want a budget pass one and read
+#: :attr:`Walk.truncated` back, so a short answer says it is short.
+PROMPT_NODE_BUDGET = 400
+
+#: Recursion bound for the walk.  Reported rather than silent when it bites.
 _DEFAULT_MAX_DEPTH = 12
 
 #: Cell size, in pixels, for the positional fallback that matches an element
@@ -90,18 +100,28 @@ def _role_ignored(role: str, needles: Optional[list[str]]) -> bool:
     return any(n in low for n in needles)
 
 
-#: Roles whose content changes *on its own* — clock digits, a taskbar, a status
-#: readout tracking the cursor.  Pruned by default from the operations that
-#: answer "is this the same state" and "did this change", because ambient churn
-#: is not a change to the task's state and treating it as one poisons the state
-#: graph: on a desktop with a menu-bar clock, an unpruned digest splits a new
-#: state every second, so a ten-step episode produces ten states and the
-#: transition graph says nothing at all.
+#: Roles whose content changes *on its own* — a clock, a status readout tracking
+#: the cursor.  Pruned by default from the operations that answer "is this the
+#: same state" and "did this change", because ambient churn is not a change to
+#: the task's state and treating it as one poisons the state graph: on a desktop
+#: with a menu-bar clock, an unpruned digest splits a new state on every tick, so
+#: a ten-step episode produces ten states and the transition graph says nothing.
 #:
-#: These are containers, matched case-insensitively as substrings, so pruning
-#: one drops its whole subtree — the clock lives *inside* the menu bar.  Note
-#: that ``"menubar"`` deliberately does not match a dropdown ``AXMenu``: an open
+#: These are containers, matched case-insensitively as substrings, so pruning one
+#: drops its whole subtree — the clock lives *inside* the menu bar.  Note that
+#: ``"menubar"`` deliberately does not match a dropdown ``AXMenu``: an open
 #: File ▸ Save menu is real interface, not furniture.
+#:
+#: The names are each *platform's*, not a shared vocabulary, and a name no
+#: backend emits is a name that never fires.  Measured on Windows, where the
+#: backend reports Win32 class names: ``"statusbar"`` matches a window's
+#: ``StatusBar`` control and ``"menubar"`` matches a real ``MenuBar``, but
+#: ``"taskbar"`` matches nothing — the shell taskbar surfaces as ``Pane``, so it
+#: cannot be named by role at all.  That is tolerable because the taskbar is a
+#: separate top-level window that an application capture does not contain; the
+#: macOS case is different precisely because the menu bar *is* part of the app's
+#: own tree.  Do not read this tuple as a promise that every entry fires
+#: everywhere.
 #:
 #: Pass ``ignore_roles=None`` to any of these functions to get the raw digest
 #: back, furniture included.
@@ -151,14 +171,41 @@ class A11yNode:
         return d
 
 
-def flatten_nodes(
+@dataclass(frozen=True)
+class Walk:
+    """A tree walk's nodes, plus whether the walk actually finished.
+
+    ``truncated`` is the important half.  Everything downstream of this module
+    scores something on the list it gets back — a verifiable reward, a state
+    graph, an assertion about what is on screen — so a list that stops early
+    without saying so makes a claim about a window that was never read.
+    """
+
+    nodes: list[A11yNode]
+    truncated: bool = False
+    #: Which bound bit — ``"nodes"``, ``"depth"``, or ``None`` when complete.
+    reason: Optional[str] = None
+
+    def __iter__(self):
+        return iter(self.nodes)
+
+    def __len__(self) -> int:
+        return len(self.nodes)
+
+
+def walk_nodes(
     root: Any,
     *,
-    max_nodes: int = _DEFAULT_MAX_NODES,
+    max_nodes: Optional[int] = None,
     max_depth: int = _DEFAULT_MAX_DEPTH,
     ignore_roles: Any = None,
-) -> list[A11yNode]:
-    """Walk an accessibility tree and return its elements in tree order.
+) -> Walk:
+    """Walk an accessibility tree in tree order and report how the walk ended.
+
+    *max_nodes* defaults to ``None`` — no budget.  Pass
+    :data:`PROMPT_NODE_BUDGET` (or your own number) when the result is headed
+    into a prompt, and check ``truncated`` before treating the list as the whole
+    window.
 
     *ignore_roles* prunes whole subtrees whose role matches (case-insensitive
     substring) — the semantic counterpart to excluding a pixel region.  Use it
@@ -169,12 +216,21 @@ def flatten_nodes(
     """
     needles = _normalise_roles(ignore_roles)
     out: list[A11yNode] = []
+    stopped: dict[str, str] = {}
 
     def visit(node: Any, depth: int, prefix: str, index: int) -> None:
-        if node is None or len(out) >= max_nodes or depth > max_depth:
+        if node is None:
             return
         role = str(node_get(node, "role", "") or "")
         if _role_ignored(role, needles):
+            return
+        if max_nodes is not None and len(out) >= max_nodes:
+            # Checked before the depth bound so a node budget is reported as
+            # itself rather than as the bound that happens to sit behind it.
+            stopped.setdefault("reason", "nodes")
+            return
+        if depth > max_depth:
+            stopped.setdefault("reason", "depth")
             return
         segment = f"{role or '?'}[{index}]"
         path = f"{prefix}/{segment}" if prefix else segment
@@ -199,7 +255,27 @@ def flatten_nodes(
             visit(child, depth + 1, path, i)
 
     visit(root, 0, "", 0)
-    return out
+    reason = stopped.get("reason")
+    return Walk(nodes=out, truncated=reason is not None, reason=reason)
+
+
+def flatten_nodes(
+    root: Any,
+    *,
+    max_nodes: Optional[int] = None,
+    max_depth: int = _DEFAULT_MAX_DEPTH,
+    ignore_roles: Any = None,
+) -> list[A11yNode]:
+    """Walk a tree and return its elements in tree order.
+
+    **Unbounded by default**, because the callers that score something on the
+    result need the whole screen: a budget here is a silently wrong answer to
+    "is this element present" or "did the content change".  Use
+    :func:`walk_nodes` when you pass a budget and need to know it bit.
+    """
+    return walk_nodes(
+        root, max_nodes=max_nodes, max_depth=max_depth, ignore_roles=ignore_roles,
+    ).nodes
 
 
 def _read_bounds(node: Any) -> Optional[tuple[int, int, int, int]]:
@@ -309,6 +385,10 @@ class UiDiff:
     modified: list[UiChange] = field(default_factory=list)
     moved: list[UiChange] = field(default_factory=list)
     matched: int = 0
+    #: True when a node budget cut one of the walks short.  ``changed == False``
+    #: then means "nothing changed in the part of the window that was read",
+    #: which is not the same claim.
+    truncated: bool = False
 
     @property
     def changed(self) -> bool:
@@ -325,9 +405,11 @@ class UiDiff:
         return len(self.added) + len(self.removed) + len(self.modified) + len(self.moved)
 
     def summary(self) -> str:
+        note = " (walk truncated - not the whole window)" if self.truncated else ""
         if not self.changed:
             return (
-                f"No accessibility change ({self.matched} element(s) unchanged)."
+                f"No accessibility change{note} "
+                f"({self.matched} element(s) unchanged)."
             )
         parts = []
         if self.modified:
@@ -338,7 +420,7 @@ class UiDiff:
             parts.append(f"{len(self.removed)} removed")
         if self.moved:
             parts.append(f"{len(self.moved)} moved")
-        return f"{', '.join(parts)} ({self.matched} unchanged)."
+        return f"{', '.join(parts)} ({self.matched} unchanged){note}."
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -520,19 +602,28 @@ def ui_diff(before_tree: Any, after_tree: Any, **kwargs: Any) -> UiDiff:
     """
     ignore_roles = kwargs.get("ignore_roles", AMBIENT_ROLES)
     kwargs = {**kwargs, "ignore_roles": ignore_roles}
-    before = _as_snapshot(before_tree, kwargs, ignore_roles)
-    after = _as_snapshot(after_tree, kwargs, ignore_roles)
-    return diff_snapshots(before, after)
+    before, before_short = _as_snapshot(before_tree, kwargs, ignore_roles)
+    after, after_short = _as_snapshot(after_tree, kwargs, ignore_roles)
+    diff = diff_snapshots(before, after)
+    diff.truncated = before_short or after_short
+    return diff
 
 
 def _as_snapshot(
     state: Any, kwargs: dict[str, Any], ignore_roles: Any = None
-) -> dict[str, A11yNode]:
+) -> tuple[dict[str, A11yNode], bool]:
+    """A ``{path: node}`` view of *state*, and whether that view is short.
+
+    A mapping that is already a snapshot came from a walk that is already over,
+    so its completeness cannot be recovered here and is reported as complete —
+    the walk that produced it is the only place that knew.
+    """
     if isinstance(state, dict) and all(
         isinstance(v, A11yNode) for v in state.values()
     ):
-        return filter_snapshot(state, ignore_roles)
-    return ui_snapshot(state, **kwargs)
+        return filter_snapshot(state, ignore_roles), False
+    walk = walk_nodes(state, **kwargs)
+    return {n.path: n for n in walk.nodes}, walk.truncated
 
 
 # ---------------------------------------------------------------------------
@@ -607,17 +698,29 @@ def content_hash(
 
     Ambient churn — the menu-bar clock, a status bar — is pruned by default, so
     a tick is not a state transition.  Without that the digest would be *worse*
-    than a pixel hash on a real desktop, where the clock changes every second;
-    see :data:`AMBIENT_ROLES`.  Pass ``ignore_roles=None`` for the raw digest
-    over everything, or your own list to prune something else.
+    than a pixel hash on a real desktop, where a clock showing seconds changes
+    every second; see :data:`AMBIENT_ROLES`.  Pass ``ignore_roles=None`` for the
+    raw digest over everything, or your own list to prune something else.
 
     Order is kept, so reordering a list *is* a new state — the list got sorted,
     which is something that happened.  Only position on screen is discarded.
+
+    The walk is unbounded by default, so the digest covers the whole tree rather
+    than a leading slice of it.  Pass ``max_nodes`` to cap it; the result then
+    carries a truncation marker, so a capped digest can never compare equal to a
+    complete one.
     """
     digest = hashlib.sha256()
-    for node in flatten_nodes(root, ignore_roles=ignore_roles, **kwargs):
+    walk = walk_nodes(root, ignore_roles=ignore_roles, **kwargs)
+    for node in walk.nodes:
         digest.update(node.role.encode("utf-8", "replace"))
         digest.update(b"\x1f")
         digest.update(node.content.encode("utf-8", "replace"))
         digest.update(b"\x1e")
+    if walk.truncated:
+        # A capped digest must never be mistakable for a complete one: two
+        # states differing only past the cut would otherwise read as the same
+        # state, which is the failure the ambient pruning exists to avoid and
+        # this would reintroduce from the other end.
+        digest.update(b"\x00truncated:" + (walk.reason or "").encode("ascii"))
     return digest.hexdigest()[:12]

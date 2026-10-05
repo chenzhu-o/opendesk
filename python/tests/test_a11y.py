@@ -12,6 +12,7 @@ import pytest
 
 from opendesk.computer.a11y import (
     A11yNode,
+    PROMPT_NODE_BUDGET,
     content_hash,
     diff_snapshots,
     element_content,
@@ -20,6 +21,7 @@ from opendesk.computer.a11y import (
     flatten_nodes,
     ui_diff,
     ui_snapshot,
+    walk_nodes,
 )
 from opendesk.computer.diagnostics import diagnose
 from opendesk.computer.sandbox import clear_sandbox, get_sandbox
@@ -123,6 +125,87 @@ class TestFlattenNodes:
         deep = node("group", "", children=[node("group", "", children=[
             node("group", "", children=[node("AXButton", "Save")])])])
         assert len(flatten_nodes(deep, max_depth=1)) == 2
+
+
+class TestWalkBounds:
+    """A bound is a budget a caller opts into, and it says when it bit.
+
+    Measured on a real Windows desktop: a Cursor window carried 442 elements, and
+    a walk that stopped at 400 without saying so made ``find_elements`` answer
+    *absent* for an element that was on screen and ``content_hash`` answer
+    *unchanged* for a state that had changed.  Both are worse than a slow answer,
+    because both are wrong in the direction of "nothing to see here".
+    """
+
+    def test_the_walk_is_unbounded_by_default(self):
+        tree = window(*[node("AXStaticText", f"row {i}") for i in range(1200)])
+        assert len(flatten_nodes(tree)) == 1201  # the window plus 1200 rows
+
+    def test_a_budget_is_reported_rather_than_silent(self):
+        tree = window(*[node("AXStaticText", f"row {i}") for i in range(50)])
+        walk = walk_nodes(tree, max_nodes=5)
+        assert len(walk.nodes) == 5
+        assert walk.truncated is True
+        assert walk.reason == "nodes"
+
+    def test_a_complete_walk_says_so(self):
+        tree = window(node("AXStaticText", "Total: 100"))
+        walk = walk_nodes(tree, max_nodes=PROMPT_NODE_BUDGET)
+        assert walk.truncated is False
+        assert walk.reason is None
+
+    def test_the_depth_bound_is_reported_too(self):
+        deep = node("group", "", children=[node("group", "", children=[
+            node("group", "", children=[node("AXButton", "Save")])])])
+        walk = walk_nodes(deep, max_depth=1)
+        assert len(walk.nodes) == 2
+        assert walk.truncated is True
+        assert walk.reason == "depth"
+
+    def test_a_pruned_role_does_not_count_as_truncation(self):
+        """Furniture dropped on purpose is not a walk that fell short."""
+        tree = window(node("AXMenuBar"), node("AXStaticText", "keep"))
+        walk = walk_nodes(tree, max_nodes=PROMPT_NODE_BUDGET, ignore_roles="menubar")
+        assert [n.content for n in walk.nodes] == ["Invoices", "keep"]
+        assert walk.truncated is False
+
+    def test_an_element_past_the_old_cap_is_still_found(self):
+        """Position 401 is not absent — the bug this class exists for."""
+        rows = [node("AXStaticText", f"row {i}") for i in range(500)]
+        tree = window(*(rows + [node("AXStaticText", "Total: 100")]))
+        assert [n.name for n in find_elements(tree, name_regex=r"Total")] == ["Total: 100"]
+
+    def test_a_capped_digest_cannot_be_mistaken_for_a_full_one(self):
+        tree = window(*[node("AXStaticText", f"row {i}") for i in range(500)])
+        full = content_hash(tree, ignore_roles=None)
+        capped = content_hash(tree, ignore_roles=None, max_nodes=PROMPT_NODE_BUDGET)
+        assert full != capped
+
+    def test_a_change_past_the_budget_is_flagged_not_reported_as_nothing(self):
+        """The dangerous shape, and the reason ``truncated`` is on the diff.
+
+        The edit lands past the budget, so the diff genuinely saw no difference.
+        Reporting a bare "no change" would assert something about a window it
+        never read.
+        """
+        rows = [node("AXStaticText", f"row {i}") for i in range(500)]
+        before = window(*rows)
+        after = window(*(rows + [node("AXStaticText", "Total: 300")]))
+
+        diff = ui_diff(before, after, max_nodes=PROMPT_NODE_BUDGET)
+        assert diff.changed is False  # the edit sits past the budget
+        assert diff.truncated is True  # ... and the diff admits it
+        assert "truncated" in diff.summary()
+
+    def test_an_unbudgeted_diff_sees_the_whole_window(self):
+        rows = [node("AXStaticText", f"row {i}") for i in range(500)]
+        before = window(*rows)
+        after = window(*(rows + [node("AXStaticText", "Total: 300")]))
+
+        diff = ui_diff(before, after)
+        assert diff.truncated is False
+        assert diff.changed is True
+        assert "truncated" not in diff.summary()
 
 
 # ---------------------------------------------------------------------------

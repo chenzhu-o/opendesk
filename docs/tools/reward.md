@@ -104,10 +104,14 @@ which no pixel threshold can — and ignores a ticking clock:
 {"kind": "ui_changed", "ref": "previous", "ignore_roles": []}
 ```
 
-Ambient furniture — menu bars, status bars, taskbars — is pruned **by default**,
+Ambient furniture — menu bars and status bars — is pruned **by default**,
 because a `ui_changed` that fired on a clock tick would be a verifiable predicate
 reporting a change that never happened. Pruning is by subtree, so ignoring a
-status bar also drops the clock inside it. Pass `ignore_roles: []` for the raw
+status bar also drops the clock inside it. The names are each *platform's* role
+vocabulary: on Windows the backend reports Win32 class names, so `statusbar` and
+`menubar` match but a shell taskbar (which surfaces as `Pane`) does not — that
+one is a separate top-level window an application capture does not contain, and
+`ignore_regions` is the tool for it. Pass `ignore_roles: []` for the raw
 comparison, or your own list to prune something else. The verdict's evidence
 records which roles were ignored, so a default that swallowed a real edit is
 visible rather than silent.

@@ -124,10 +124,21 @@ menubar · menu bar · statusbar · status bar · taskbar · task bar
 
 These are the containers where content changes *on its own*. Without pruning them
 the semantic channel is not merely unimproved, it is **worse than the pixel
-channel** on a real desktop: a menu-bar clock changes every second, so a
-ten-step episode produces ten distinct states, the transition graph degenerates
-to a straight line, and every step reads as progress. The pixel hash, for all its
-blindness, at least ignores a tick.
+channel** on a real desktop: a menu-bar clock ticks on its own cadence — every
+second, if it is configured to show seconds — so a ten-step episode produces ten
+distinct states, the transition graph degenerates to a straight line, and every
+step reads as progress. The pixel hash, for all its blindness, at least ignores
+a tick.
+
+The entries are each *platform's* role vocabulary rather than a shared one, and
+an entry no backend emits never fires. Measured on Windows, where the backend
+reports Win32 class names: `statusbar` matches a window's `StatusBar` control
+and `menubar` matches a real `MenuBar`, but `taskbar` matches nothing — the
+shell taskbar surfaces as `Pane`. That costs little, because the taskbar is a
+separate top-level window and an application capture does not contain it. (On
+macOS the menu bar *is* part of the app's own tree, which is why the hazard is
+real there and why this tuple exists at all.) A clock outside the captured
+window is the pixel channel's problem, and `ignore_regions` is the tool for it.
 
 Because the same default applies everywhere the digest is taken — the `ui` tool,
 `screenshot`, `diagnose` — digests from different tools stay comparable. A
