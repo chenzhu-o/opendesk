@@ -3,7 +3,9 @@
 The private key file is the master secret for this opendesk install: anyone
 who reads it can impersonate this machine to its paired peers.  We write it
 ``0600`` (owner read/write only) and trust filesystem permissions for the
-v1 threat model (single-user machines).  Encrypting the key file with a
+v1 threat model (single-user machines).  On Windows there are no POSIX mode
+bits to set — the file inherits the ACL of the profile directory we create it
+in — so the ``0600`` is best-effort there.  Encrypting the key file with a
 passphrase is a v2 concern.
 """
 
@@ -107,8 +109,22 @@ class Identity:
         _atomic_write_secret(home_dir / IDENTITY_FILE, _raw_private(self._private))
 
 
+def _restrict_to_owner(fd: int) -> None:
+    """Drop group/world access on an open descriptor, where the OS can express it.
+
+    POSIX gets ``0600``.  Windows has no POSIX permission bits — a file's access
+    is governed by the ACL it inherits from its parent directory — and
+    ``os.fchmod`` does not exist there at all, so the call is skipped instead of
+    raising.  The key still lands inside the user's own profile directory; we
+    simply have no descriptor-level mode to set.
+    """
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is not None:
+        fchmod(fd, 0o600)
+
+
 def _atomic_write_secret(path: Path, data: bytes) -> None:
-    """Write *data* to *path* atomically, with 0600 permissions.
+    """Write *data* to *path* atomically, with 0600 permissions where available.
 
     Avoids leaving a half-written file if the process dies mid-write, and
     avoids briefly exposing the secret with world-readable permissions.
@@ -117,7 +133,7 @@ def _atomic_write_secret(path: Path, data: bytes) -> None:
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
     try:
         os.write(fd, data)
-        os.fchmod(fd, 0o600)
+        _restrict_to_owner(fd)
         os.close(fd)
         os.replace(tmp, path)
     except BaseException:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,13 @@ class TestIdentity:
         # Second call must load the existing key, not generate a new one.
         assert a.public_bytes == b.public_bytes
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason=(
+            "Windows has no POSIX permission bits — the key file inherits the "
+            "ACL of the directory it is created in, so there is nothing to assert"
+        ),
+    )
     def test_file_is_owner_only(self, tmp_path: Path):
         Identity.load_or_create(tmp_path)
         path = tmp_path / "identity.key"

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,17 @@ from tests._fakes import FakeComputer
 # ---------------------------------------------------------------------------
 
 
+# Windows has no POSIX permission bits: a file or directory gets the ACL of its
+# parent directory instead, so the group/world masks these two tests assert
+# simply cannot be observed there.
+_posix_modes_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows has no POSIX permission bits — access comes from the inherited ACL",
+)
+
+
 class TestAuditLogFile:
+    @_posix_modes_only
     @pytest.mark.asyncio
     async def test_creates_directory_with_secure_mode(self, tmp_path: Path):
         AuditLog(home=tmp_path)
@@ -129,6 +140,7 @@ class TestAuditLogFile:
             obj = json.loads(line)
             assert obj["type"] == "call"
 
+    @_posix_modes_only
     @pytest.mark.asyncio
     async def test_file_mode_0600(self, tmp_path: Path):
         log = AuditLog(home=tmp_path)
