@@ -169,7 +169,7 @@ opendesk is built in independently-importable layers:
 | **Automation** | `learn` + `schedule` backed by pynput recording, JSON storage, APScheduler daemon. |
 | **Learning** | Verifiable rewards, goal-state anchoring, step-level process signals, and RL-ready trajectory export (`opendesk.learning`). |
 
-Full details → [docs/architecture.md](docs/architecture.md)
+Full details → [docs/architecture/](docs/architecture/index.md)
 
 ---
 
@@ -210,7 +210,7 @@ rollout    ──►           JSONL trajectories + chosen/rejected preference p
 Together they form the **environment and reward** half of reinforcement
 learning — the half a harness can honestly own. Gradients happen elsewhere.
 
-Full reference → [docs/tools.md](docs/tools.md)
+Full reference → [docs/tools/](docs/tools/index.md)
 
 ---
 
@@ -242,7 +242,7 @@ opendesk scheduler start
 
 Supported timing: `every 30m` · `every 2h` · `every day at 09:00` · `every friday at 17:00` · raw cron
 
-Full guide → [docs/automation.md](docs/automation.md)
+Full guide → [docs/automation/](docs/automation/index.md)
 
 ---
 
@@ -307,7 +307,7 @@ Subsequent connections use mutual static-key authentication. Every frame is
 ChaCha20-Poly1305 AEAD-encrypted with per-direction counters. No CA-signed
 certificates required — the keys ARE the trust.
 
-Full guide → [docs/remote.md](docs/remote.md)
+Full guide → [docs/remote/](docs/remote/index.md)
 
 ---
 
@@ -355,7 +355,7 @@ sudo apt install xclip xdotool python3-atspi
 ### Windows
 No extra permissions needed — opendesk uses Win32 APIs by default.
 
-See [docs/permissions.md](docs/permissions.md) for full setup guide.
+See [docs/getting-started/](docs/getting-started/index.md) for full setup guide.
 
 ---
 
@@ -400,7 +400,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Works with Anthropic SDK, OpenAI, and LangChain — see [docs/integrations.md](docs/integrations.md)
+Works with Anthropic SDK, OpenAI, and LangChain — see [docs/integrations/](docs/integrations/index.md)
 
 ### On-device models (Ollama, LM Studio, vLLM, llama.cpp)
 
