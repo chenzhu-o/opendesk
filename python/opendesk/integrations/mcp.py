@@ -54,10 +54,11 @@ from opendesk.tools.base import ToolContext
 
 
 # Tools that operate on a Computer's state — these get peer routing.  The
-# rest (learn, schedule, audit) act on local session state and aren't
+# rest (learn, skill, schedule, audit) act on local session state and aren't
 # remotable.
 PEER_AWARE_TOOLS: set[str] = {
     "screenshot", "mouse", "keyboard", "app", "ui", "clipboard", "ocr",
+    "system",
 }
 
 

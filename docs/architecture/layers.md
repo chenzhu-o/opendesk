@@ -68,16 +68,31 @@ Pydantic value types exchanged across the boundary: `Point`, `Rect`,
 
 ---
 
-## Computer Use: Three-Tier Grounding Architecture
+## Computer Use: Four-Tier Action Architecture
 
-All computer-use interaction follows a strict three-tier hierarchy. The tier
+All computer-use interaction follows a strict four-tier hierarchy. The tier
 priority is encoded directly in tool descriptions, so any model that reads
 the tool list follows it without a separate orchestration layer.
 
 ```
-Tier 1: Semantic AX  ──(element not found)──►  Tier 2: Grounded SoM  ──(AX tree empty)──►  Tier 3: Raw Pixel
+Tier 0: CLI / Filesystem  ──(no equivalent)──►  Tier 1: Semantic AX  ──(element not found)──►  Tier 2: Grounded SoM  ──(AX tree empty)──►  Tier 3: Raw Pixel
 ```
 
+### Tier 0 — Hybrid CLI / Filesystem (`system` tool)
+
+Most tasks have a command-line or file equivalent. Running it is faster than
+clicking, costs no screenshot or vision-model call, and survives app-version
+changes. The `system` tool exposes the `Computer` primitives that were always
+present but never surfaced to the agent — `shell`, `exec`, `read_file`,
+`write_file`, `list_dir`, `stat`, `mkdir`, `move`, `delete`, `processes`,
+`environment`, `notifications`.
+
+When a task is expressible as a command or a file operation, this tier is
+preferred over every GUI tier below. The GUI tiers are for surfaces with no
+CLI (canvas editors, games, some desktop apps) — the *hybrid* interface from
+recent computer-use work.
+
+The tier selection order is: **CLI → semantic AX → grounded SoM → raw pixel**.
 Every action at any tier is followed by an automatic per-action pixel-diff
 against the prior screenshot — a free feedback signal that tells the model
 whether its action had any visual effect.
@@ -180,6 +195,7 @@ appended to every screenshot tool output:
 changed: bool
 change_fraction: float       # 0.0–1.0
 changed_region: [x, y, w, h] # bounding box of changed pixels
+suppressed_pixels: int       # changed pixels hidden by ignore_regions
 summary: str                  # natural-language signal for the model
 ```
 
@@ -192,6 +208,17 @@ No visible change detected — the action may not have had any effect.
 This closes the perception loop per-action, in tens of milliseconds, with no
 VLM call. The model can immediately detect ineffective actions and re-plan
 (retry via a different tier, adjust parameters, or check focus).
+
+One caveat is structural, not a tuning problem: a ticking clock is **real** pixel
+change of a few dozen pixels, and so is a one-glyph edit. No threshold separates
+them, because they differ in meaning rather than magnitude. `ignore_regions`
+excludes `[x, y, w, h]` boxes where ambient churn lives; derive them from the
+accessibility tree with `regions_for_roles` rather than hardcoding coordinates,
+so they survive a resolution or theme change.
+
+The pixel channel answers "did anything change". Questions about *what* changed
+belong to the accessibility tree — see
+[The Accessibility Channel](accessibility.md).
 
 ### Tier-Agnostic Action Replay
 
@@ -243,6 +270,8 @@ poke OS APIs directly — they always go through `ctx.computer`.
 | `app.py` | `AppTool` | `ctx.computer.open_app/close_app/focus_app/list_apps` |
 | `clipboard.py` | `ClipboardTool` | `ctx.computer.clipboard_read/clipboard_write` |
 | `ocr.py` | `OCRTool` | `ctx.computer.capture()` → `ocr_image(pixmap.data)` |
+| `system.py` | `SystemTool` | Hybrid CLI / filesystem: `shell`, `exec`, `read_file`, `write_file`, `list_dir`, `processes`, … (Tier 0) |
+| `skills.py` | `SkillTool` | Persistent parameterised procedures: save / find / run (local session state; never remoted) |
 | `automation.py` | `LearnTool`, `ScheduleTool` | Local session state; never remoted |
 | `audit.py` | `AuditTool` | Local audit log; never remoted |
 

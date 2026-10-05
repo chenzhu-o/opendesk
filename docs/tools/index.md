@@ -2,10 +2,11 @@
 
 All tools share the same interface: `await tool.execute(ctx, params) -> ToolResult`.
 
-**Tool priority rule:** `ui` → `screenshot(marks=True)` → `mouse` with image dimensions.
+**Tool priority rule:** `system` (CLI/filesystem) → `ui` → `screenshot(marks=True)` → `mouse` with image dimensions.
 
 | Tool | Description |
 |---|---|
+| [`system`](system.md) | Hybrid CLI + filesystem layer — run commands, read/write files |
 | [`ui`](ui.md) | Accessibility-based UI interaction — click by name, type, read values |
 | [`screenshot`](screenshot.md) | Screen capture with optional Set-of-Marks overlay |
 | [`mouse`](mouse.md) | Pixel-level mouse control with HiDPI coordinate translation |
@@ -14,7 +15,28 @@ All tools share the same interface: `await tool.execute(ctx, params) -> ToolResu
 | [`clipboard`](clipboard.md) | Read and write clipboard text |
 | [`ocr`](ocr.md) | Extract text from any screen region |
 | [`audit`](audit.md) | Read the session audit log |
+| [`skill`](skills.md) | Save, find, and run reusable parameterised skills |
 | [`learn`](learn.md) | Record and replay desktop workflows |
+| [`memory`](memory.md) | Recall past screen observations (lossless visual memory) |
+| [`diagnose`](diagnose.md) | State-transition diagnosis — where a session stalled |
+| [`reward`](reward.md) | Verifiable task rewards, goal states, agent assertions, episode bookkeeping |
+| [`rollout`](rollout.md) | Export RL-ready trajectories and preference pairs |
+
+---
+
+## Learning & diagnosis
+
+These four tools turn a session into something measurable and reusable. None of
+them calls a model — every signal is derived from observable state.
+
+```
+screenshot ──► memory    ──► look back at what was on screen
+audit log  ──► diagnose  ──► where did it stall?
+reward     ──►            ──► did it satisfy the checklist?
+rollout    ──►            ──► training data out
+```
+
+See [The Learning Layer](../architecture/learning.md) for how they fit together.
 
 ---
 

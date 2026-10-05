@@ -113,3 +113,6 @@ include = ["opendesk*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: spawns a real subprocess or waits on real I/O (e.g. an MCP server over stdio). Deselect with -m 'not slow' when iterating.",
+]

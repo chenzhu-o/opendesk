@@ -10,10 +10,35 @@ tool = ScreenshotTool()
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `marks` | bool | false | Overlay numbered bounding boxes (Set-of-Marks) on interactive elements |
+| `tree` | bool | false | Also record the accessibility tree's content with this frame |
 | `show_cursor` | bool | false | Draw a red dot at the current cursor position |
 | `zoom` | `[x0,y0,x1,y1]` | null | Crop a region for close-up inspection |
 | `region` | `[x,y,w,h]` | null | Capture only this screen region |
 | `save_path` | str | null | Save PNG to disk at this absolute path |
+
+### `tree=true` — record what the screen said
+
+A screenshot records what the screen *looked* like. `tree=true` also records what
+it *said*: each element's role and content, as a text snapshot kept alongside the
+PNG in the [observation memory](memory.md).
+
+That is what makes a later check assert something about the task rather than
+about the picture:
+
+```python
+{"kind": "ui_element", "name_regex": "^Total$", "value_regex": "^300$"}
+{"kind": "ui_changed", "ref": "previous", "ignore_roles": ["menubar"]}
+```
+
+Both need the snapshot to have been taken — a `ui_changed` check with no recorded
+tree says so rather than guessing. `marks=true` implies it, since the overlay
+already reads the tree; the flag exists so a plain capture does not pay for a
+tree read it does not need.
+
+The capture also stamps an accessibility **content digest** onto the session, so
+the actions that follow can be grouped by content in
+[`diagnose`](diagnose.md) — the difference between noticing an edited glyph and
+not. See [The Accessibility Channel](../architecture/accessibility.md).
 
 ## Ask Claude
 
@@ -45,6 +70,11 @@ print(result.output)  # lists: [1] Button "OK" at (120,340) 80×30 — click mar
 # Zoom into a region
 result = await tool.execute(ctx, params(zoom=[100, 200, 400, 350]))
 
+# Record the accessibility tree too, so a later check can assert what a
+# field says ("Total reads 300") rather than only that the screen moved
+result = await tool.execute(ctx, params(tree=True))
+print(result.metadata["ui_elements"], result.metadata["ui_digest"])
+
 # Save to disk
 result = await tool.execute(ctx, params(save_path="/tmp/before.png"))
 ```
@@ -55,6 +85,7 @@ The tool output always includes:
 - Capture dimensions and Retina note: `image_width=1440, image_height=900` to pass to the mouse tool.
 - Change detection vs previous screenshot: `"12.3% of pixels changed in region [x=400, y=200, 600×300px]"`.
 - SoM summary if `marks=True`.
+- Accessibility content summary if `tree=True`: element count and content digest.
 
 ---
 

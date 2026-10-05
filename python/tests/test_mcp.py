@@ -9,6 +9,8 @@ it covers the full agent-facing surface.
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -363,3 +365,269 @@ def _session_with_remote(
     # without trying to discover + connect.
     session._connections[name] = remote  # type: ignore[attr-defined]
     return session
+
+
+# ---------------------------------------------------------------------------
+# The learning layer over MCP — the path a real agent actually takes
+# ---------------------------------------------------------------------------
+#
+# Everything below goes through MCPDispatcher, i.e. exactly what Claude Code or
+# Cursor sees: list_tools() for the schemas, call_tool() with parsed JSON
+# arguments.  Two things can break here that unit tests on the tools cannot
+# catch -- an action missing from the advertised schema, and a parameter that
+# does not survive JSON round-tripping -- so both are asserted directly.
+
+
+class TestLearningToolsAreAdvertised:
+    """An action an agent cannot see is an action it will never take."""
+
+    @pytest.mark.asyncio
+    async def test_the_learning_tools_are_listed(self, tmp_path: Path):
+        dispatcher = MCPDispatcher(
+            create_registry(), MCPSession(home=tmp_path, local=FakeComputer()),
+        )
+        names = {e.name for e in await dispatcher.list_tools()}
+        assert {"reward", "rollout", "diagnose", "memory"} <= names
+
+    @pytest.mark.asyncio
+    async def test_every_reward_action_is_in_the_schema(self, tmp_path: Path):
+        """The enum is what the model gets to choose from.
+
+        Adding a handler without adding it to the Literal leaves a capability
+        that exists in Python and is invisible over MCP -- the exact shape of
+        this bug, so it is worth pinning rather than trusting.
+        """
+        from opendesk.tools.reward import RewardTool
+
+        dispatcher = MCPDispatcher(
+            create_registry(), MCPSession(home=tmp_path, local=FakeComputer()),
+        )
+        entry = next(e for e in await dispatcher.list_tools() if e.name == "reward")
+        advertised = set(entry.schema["properties"]["action"]["enum"])
+        handlers = {
+            name.lstrip("_") for name in vars(RewardTool)
+            if name.startswith("_") and name[1:] in advertised
+        }
+        # Everything the tool can do is offered, and nothing else.
+        assert {"begin", "check", "assert", "assertions", "end"} <= advertised
+        assert "assert" in advertised and "assertions" in advertised
+        assert advertised == handlers | {"goal_capture", "goal_score",
+                                        "goal_list", "episodes"}
+        # The new parameters are described, not just accepted.
+        assert "name" in entry.schema["properties"]
+        assert "claim" in entry.schema["properties"]
+        assert "checks" in entry.schema["properties"]
+
+    @pytest.mark.asyncio
+    async def test_the_reward_description_names_the_assertion_actions(self, tmp_path: Path):
+        dispatcher = MCPDispatcher(
+            create_registry(), MCPSession(home=tmp_path, local=FakeComputer()),
+        )
+        entry = next(e for e in await dispatcher.list_tools() if e.name == "reward")
+        assert "action='assert'" in entry.description
+        assert "value_regex" in entry.description      # the semantic predicate
+
+
+class TestLearningToolsRoundTrip:
+    """One episode end to end, over the MCP surface, with a real file check."""
+
+    @staticmethod
+    def _text(result) -> str:
+        return "\n".join(r.text for r in result if isinstance(r, TextResult))
+
+    @pytest.mark.asyncio
+    async def test_begin_assert_end_export_over_mcp(self, tmp_path: Path):
+        from opendesk.computer.sandbox import clear_sandbox
+        from opendesk.learning import assertions, trajectories
+
+        local = FakeComputer()
+        session = MCPSession(home=tmp_path, local=local)
+        dispatcher = MCPDispatcher(create_registry(), session)
+
+        sid = "mcp-local"           # the session id the dispatcher derives
+        clear_sandbox(sid)
+        trajectories.clear_episodes(sid)
+        assertions.clear_assertions(sid)
+
+        target = tmp_path / "invoice.pdf"
+
+        text = self._text(await dispatcher.call_tool("reward", {
+            "action": "begin",
+            "task": "Export the invoice",
+            "spec": {"checks": [{"kind": "file_exists", "path": str(target)}]},
+        }))
+        assert "Started episode" in text, text
+
+        # The agent states what it believes — and is told it is wrong.
+        text = self._text(await dispatcher.call_tool("reward", {
+            "action": "assert",
+            "name": "invoice exported",
+            "claim": "the export dialog was accepted",
+            "checks": [{"kind": "file_exists", "path": str(target)}],
+        }))
+        assert "DOES NOT HOLD" in text, text
+
+        # Do the work, then the claim is true.
+        target.write_text("pdf", encoding="utf-8")
+        text = self._text(await dispatcher.call_tool("reward", {
+            "action": "assert",
+            "name": "invoice on disk",
+            "claim": "the PDF is written",
+            "checks": [{"kind": "file_exists", "path": str(target)}],
+        }))
+        assert "HOLDS" in text and "DOES NOT HOLD" not in text, text
+
+        text = self._text(await dispatcher.call_tool("reward", {"action": "assertions"}))
+        assert "2 declared" in text, text
+
+        text = self._text(await dispatcher.call_tool("reward", {"action": "end"}))
+        assert "Closed episode" in text, text
+        assert "reward=1.00" in text, text
+        assert "claims: 2 declared, 1 held" in text, text
+
+        text = self._text(await dispatcher.call_tool(
+            "rollout", {"action": "export", "path": str(tmp_path / "t.jsonl")}
+        ))
+        assert "Exported" in text, text
+
+        record = json.loads((tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        assert record["outcome"]["reward"] == 1.0
+        metrics = record["assertions"]["metrics"]
+        assert metrics["declared"] == 2 and metrics["held"] == 1
+        assert metrics["precision"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_the_session_id_the_agent_sees_is_stable(self, tmp_path: Path):
+        """`mcp-<peer>` must match what `ui`/`screenshot` write to.
+
+        If reward and ui disagreed about the session, a reward check would read a
+        different observation store and a different audit log, and the diagnosis
+        would be built from a log with no actions in it.
+        """
+        from opendesk.computer.sandbox import get_sandbox
+
+        local = FakeComputer()
+        session = MCPSession(home=tmp_path, local=local)
+        dispatcher = MCPDispatcher(create_registry(), session)
+
+        await dispatcher.call_tool(
+            "ui", {"action": "get_tree", "app": "TextEdit"}
+        )
+        ui_log = len(get_sandbox("mcp-local").audit_log)
+
+        await dispatcher.call_tool("reward", {"action": "begin", "task": "t"})
+        assert len(get_sandbox("mcp-local").audit_log) > ui_log
+
+    @pytest.mark.asyncio
+    async def test_diagnose_over_mcp(self, tmp_path: Path):
+        from opendesk.computer.sandbox import ActionType, clear_sandbox, get_sandbox
+
+        local = FakeComputer()
+        session = MCPSession(home=tmp_path, local=local)
+        dispatcher = MCPDispatcher(create_registry(), session)
+
+        clear_sandbox("mcp-local")
+        sb = get_sandbox("mcp-local")
+        for screen in ("aaaa1111bbbb2222", "aaaa1111bbbb2222", "cccc3333dddd4444"):
+            sb.current_screen = screen
+            await sb.record_action(ActionType.UI_ACTION, {})
+
+        text = self._text(await dispatcher.call_tool("diagnose", {}))
+        assert "State-transition diagnosis" in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_bad_assertion_argument_is_an_error_not_a_crash(self, tmp_path: Path):
+        """Over MCP the only channel back to the model is text.
+
+        An unhandled exception becomes a transport error the client reports as
+        "server crashed", which tells the agent nothing it can act on.
+        """
+        dispatcher = MCPDispatcher(
+            create_registry(), MCPSession(home=tmp_path, local=FakeComputer()),
+        )
+        text = self._text(await dispatcher.call_tool("reward", {
+            "action": "assert", "name": "x", "checks": [{"kind": "teleport"}],
+        }))
+        assert text.startswith("ERROR") is False
+        assert "Invalid assertion checks" in text or "teleport" in text, text
+
+
+class TestSchemasSurviveTheWire:
+    """A tool schema is JSON that goes over a transport.
+
+    Anything unserialisable in it fails `initialize` or `tools/list`, which a
+    client reports as the server being broken — with no hint that one field type
+    was wrong. Cheaper to catch here than in a user's editor.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_tool_schema_is_json_serialisable(self, tmp_path: Path):
+        dispatcher = MCPDispatcher(
+            create_registry(), MCPSession(home=tmp_path, local=FakeComputer()),
+        )
+        for entry in await dispatcher.list_tools():
+            encoded = json.dumps({"name": entry.name,
+                                  "description": entry.description,
+                                  "inputSchema": entry.schema})
+            assert json.loads(encoded)["name"] == entry.name
+
+    @pytest.mark.asyncio
+    async def test_every_schema_is_a_valid_mcp_tool(self, tmp_path: Path):
+        """Round-trip through the real ``mcp.types.Tool`` model."""
+        mcp_types = pytest.importorskip("mcp.types")
+        dispatcher = MCPDispatcher(
+            create_registry(), MCPSession(home=tmp_path, local=FakeComputer()),
+        )
+        for entry in await dispatcher.list_tools():
+            tool = mcp_types.Tool(
+                name=entry.name, description=entry.description,
+                inputSchema=entry.schema,
+            )
+            restored = mcp_types.Tool.model_validate_json(tool.model_dump_json())
+            assert restored.name == entry.name
+            assert set(restored.inputSchema.get("properties", {})) == \
+                set(entry.schema.get("properties", {}))
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings(
+    # Windows' proactor loop tears the stdio subprocess transport down after the
+    # loop has closed, so the transport's __del__ warns during GC. It is an
+    # artefact of running a real subprocess inside a test-scoped loop, not a
+    # leak in the server; there is nothing to fix on this side.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+)
+class TestLiveTransport:
+    """The one test that runs a real server process over stdio.
+
+    Everything else here calls the dispatcher directly, which is what
+    ``create_mcp_server`` wraps — but wrapping *is* code, and the conversion to
+    ``mcp.types.*`` plus the transport is the part a client actually depends on.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_real_client_sees_the_assertion_actions(self, tmp_path: Path):
+        pytest.importorskip("mcp")
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=sys.executable, args=["-m", "opendesk.integrations.mcp"],
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = {t.name: t for t in (await session.list_tools()).tools}
+
+                assert {"reward", "rollout", "diagnose", "memory"} <= set(tools)
+                actions = tools["reward"].inputSchema["properties"]["action"]["enum"]
+                assert "assert" in actions and "assertions" in actions
+
+                # And a call with agent-declared checks comes back as text.
+                result = await session.call_tool("reward", {
+                    "action": "assert",
+                    "name": "shell works",
+                    "claim": "a trivial command succeeds",
+                    "checks": [{"kind": "shell", "command": "exit 0"}],
+                })
+                assert result.content and "HOLDS" in result.content[0].text

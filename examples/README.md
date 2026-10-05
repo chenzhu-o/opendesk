@@ -10,6 +10,18 @@ Use OpenDesk to test a web app's UI through natural language.
 
 See [ui-testing/](ui-testing/) for setup and examples.
 
+## Learning-layer evaluation
+
+A runnable harness for the reward, process-reward and preference machinery —
+four tasks, three attempts each, no GUI required.
+
+```bash
+python examples/learning-eval/run.py
+```
+
+See [learning-eval/](learning-eval/) for what it measures and, more importantly,
+what it does not.
+
 ---
 
 More examples coming soon.

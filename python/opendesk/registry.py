@@ -65,6 +65,12 @@ def create_registry() -> ToolRegistry:
     - ``ui``         — accessibility-based interaction (FIRST CHOICE over mouse)
     - ``clipboard``  — read / write system clipboard
     - ``ocr``        — extract text via pytesseract / Vision / WinRT
+    - ``system``     — hybrid CLI + filesystem layer (shell, exec, files, processes)
+    - ``skill``      — save / find / run reusable parameterised skill procedures
+    - ``memory``     — recall past screen observations (lossless visual memory)
+    - ``diagnose``   — state-transition diagnosis of a session (where it stalled)
+    - ``reward``     — verifiable task rewards, goal states, episode bookkeeping
+    - ``rollout``    — export RL-ready trajectories and preference pairs
     - ``learn``      — record and replay computer tasks
     - ``audit``      — show the session audit log inside any MCP/agent session
     """
@@ -75,6 +81,12 @@ def create_registry() -> ToolRegistry:
     from opendesk.tools.ui import UITool
     from opendesk.tools.clipboard import ClipboardTool
     from opendesk.tools.ocr import OCRTool
+    from opendesk.tools.system import SystemTool
+    from opendesk.tools.skills import SkillTool
+    from opendesk.tools.memory import MemoryTool
+    from opendesk.tools.diagnose import DiagnoseTool
+    from opendesk.tools.reward import RewardTool
+    from opendesk.tools.rollout import RolloutTool
     from opendesk.tools.automation import LearnTool, ScheduleTool
     from opendesk.tools.audit import AuditTool
 
@@ -87,6 +99,12 @@ def create_registry() -> ToolRegistry:
         UITool,
         ClipboardTool,
         OCRTool,
+        SystemTool,
+        SkillTool,
+        MemoryTool,
+        DiagnoseTool,
+        RewardTool,
+        RolloutTool,
         LearnTool,
         ScheduleTool,
         AuditTool,
@@ -100,6 +118,8 @@ def create_minimal_registry() -> ToolRegistry:
     """Like :func:`create_registry` but without heavy optional tools (OCR).
 
     Suitable for environments where pytesseract / Tesseract are not installed.
+    ``system``, ``skill``, ``memory``, ``diagnose``, ``reward`` and ``rollout``
+    are pure-Python and carry no extra dependencies, so they remain available.
     """
     from opendesk.tools.screenshot import ScreenshotTool
     from opendesk.tools.mouse import MouseTool
@@ -107,8 +127,18 @@ def create_minimal_registry() -> ToolRegistry:
     from opendesk.tools.app import AppTool
     from opendesk.tools.ui import UITool
     from opendesk.tools.clipboard import ClipboardTool
+    from opendesk.tools.system import SystemTool
+    from opendesk.tools.skills import SkillTool
+    from opendesk.tools.memory import MemoryTool
+    from opendesk.tools.diagnose import DiagnoseTool
+    from opendesk.tools.reward import RewardTool
+    from opendesk.tools.rollout import RolloutTool
 
     registry = ToolRegistry()
-    for tool_cls in (ScreenshotTool, MouseTool, KeyboardTool, AppTool, UITool, ClipboardTool):
+    for tool_cls in (
+        ScreenshotTool, MouseTool, KeyboardTool, AppTool, UITool,
+        ClipboardTool, SystemTool, SkillTool, MemoryTool, DiagnoseTool,
+        RewardTool, RolloutTool,
+    ):
         registry.register(tool_cls())
     return registry

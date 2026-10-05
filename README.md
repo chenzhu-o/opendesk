@@ -145,8 +145,10 @@ opendesk is built in independently-importable layers:
 ┌──────────────────────────────────────────────────────────────┐
 │  Integrations   MCP  ·  Claude Code  ·  OpenAI  ·  LangChain │
 ├──────────────────────────────────────────────────────────────┤
-│  Tools          screenshot · mouse · keyboard · ui ·         │
-│                 clipboard · ocr · learn · schedule · audit   │
+│  Tools          system · ui · screenshot · mouse · keyboard ·│
+│                 app · clipboard · ocr · skill · learn ·      │
+│                 memory · diagnose · reward · rollout ·       │
+│                 schedule · audit                              │
 ├──────────────────────────────────────────────────────────────┤
 │  Computer       LocalComputer  ·  RemoteComputer  (ABC)      │
 ├──────────────────────────────────────────────────────────────┤
@@ -165,6 +167,7 @@ opendesk is built in independently-importable layers:
 | **Remote** | `opendesk serve` / `opendesk pair`, mDNS discovery, client helper. |
 | **Protocol** | Five-frame wire protocol (msgpack binary, no base64 ever), WebSocket transport, mutual X25519 + ChaCha20-Poly1305 auth and encryption. |
 | **Automation** | `learn` + `schedule` backed by pynput recording, JSON storage, APScheduler daemon. |
+| **Learning** | Verifiable rewards, goal-state anchoring, step-level process signals, and RL-ready trajectory export (`opendesk.learning`). |
 
 Full details → [docs/architecture.md](docs/architecture.md)
 
@@ -174,6 +177,7 @@ Full details → [docs/architecture.md](docs/architecture.md)
 
 | Tool | What it does |
 |------|-------------|
+| `system` | Hybrid CLI + filesystem — run commands, read/write files (the fast path when a task has a command equivalent) |
 | `screenshot` | Capture the screen with numbered boxes on every clickable element (Set-of-Marks) |
 | `ui` | Click and type by element name — no coordinates needed |
 | `mouse` | Pixel-level mouse control for anything `ui` can't reach |
@@ -181,8 +185,30 @@ Full details → [docs/architecture.md](docs/architecture.md)
 | `app` | Open, close, and focus applications |
 | `clipboard` | Read and write the system clipboard |
 | `ocr` | Extract text from any region of the screen |
+| `skill` | Save, find, and run reusable parameterised procedures |
 | `learn` | Record a workflow once, replay it anytime |
 | `schedule` | Run any task or learned procedure on a timer |
+| `memory` | Recall past screen observations — lossless visual memory |
+| `diagnose` | State-transition diagnosis: where a session stalled and why |
+| `reward` | Verifiable task rewards, goal states, episode bookkeeping |
+| `rollout` | Export RL-ready trajectories and preference pairs |
+
+### Learning & diagnosis
+
+`memory`, `diagnose`, `reward` and `rollout` turn a session into something
+measurable and reusable. None of them calls a model — every signal comes from
+observable state (files, shell output, the accessibility tree, pixels), so a
+result can always be audited.
+
+```
+screenshot ──► memory    look back at what was on screen
+audit log  ──► diagnose  where did it stall? bottlenecks, loops, inertia
+reward     ──►           did it satisfy a machine-checkable checklist?
+rollout    ──►           JSONL trajectories + chosen/rejected preference pairs
+```
+
+Together they form the **environment and reward** half of reinforcement
+learning — the half a harness can honestly own. Gradients happen elsewhere.
 
 Full reference → [docs/tools.md](docs/tools.md)
 

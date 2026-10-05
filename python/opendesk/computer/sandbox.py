@@ -46,6 +46,37 @@ class ActionType(str, Enum):
     CLIPBOARD_WRITE = "clipboard_write"
     OCR = "ocr"
     UI_ACTION = "ui_action"
+    # Hybrid CLI / filesystem layer (`system` tool)
+    SHELL = "shell"
+    EXEC = "exec"
+    FILE_READ = "file_read"
+    FILE_WRITE = "file_write"
+    FILE_LIST = "file_list"
+    FILE_STAT = "file_stat"
+    FILE_MKDIR = "file_mkdir"
+    FILE_MOVE = "file_move"
+    FILE_DELETE = "file_delete"
+    PROCESS_LIST = "process_list"
+    ENVIRONMENT = "environment"
+    NOTIFICATIONS = "notifications"
+    # Persistent skill library (`skill` tool)
+    SKILL_SAVE = "skill_save"
+    SKILL_RUN = "skill_run"
+    SKILL_DELETE = "skill_delete"
+    # Visual memory (`memory` tool)
+    MEMORY_RECALL = "memory_recall"
+    MEMORY_DIFF = "memory_diff"
+    MEMORY_CLEAR = "memory_clear"
+    # Process diagnosis (`diagnose` tool)
+    DIAGNOSE = "diagnose"
+    # Learning layer — RL environment (`reward` / `rollout` tools)
+    EPISODE_BEGIN = "episode_begin"
+    EPISODE_END = "episode_end"
+    REWARD_CHECK = "reward_check"
+    GOAL_CAPTURE = "goal_capture"
+    GOAL_SCORE = "goal_score"
+    ROLLOUT_EXPORT = "rollout_export"
+    PREFERENCE_BUILD = "preference_build"
 
 
 @dataclass
@@ -60,12 +91,27 @@ class AuditEntry:
     result: str | None = None
     error: str | None = None
     replay_params: dict[str, Any] | None = None
+    #: Fingerprint of the screen this action was issued against.  Lets callers
+    #: reconstruct which actions happened on the same functional screen —
+    #: the input to state-transition diagnosis.  ``None`` when no screenshot
+    #: had been taken yet.
+    screen: str | None = None
+    #: Content digest of the accessibility tree this action was issued against
+    #: (see :func:`opendesk.computer.a11y.content_hash`).  The perceptual
+    #: ``screen`` fingerprint groups states by *layout*, so a single edited glyph
+    #: does not register as a new state.  This one groups by *content*, so it
+    #: does — and a clock tick does not, because the clock is text that did not
+    #: change.  Diagnosis prefers it whenever a session has it.
+    ui: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        # Tolerate a raw string in case an AuditEntry is built directly rather
+        # than through ComputerSandbox.record_action, which coerces to ActionType.
+        action = getattr(self.action_type, "value", self.action_type)
         d = {
             "id": self.id,
             "timestamp": self.timestamp,
-            "action": self.action_type.value,
+            "action": action,
             "params": self.params,
             "session_id": self.session_id,
             "result": self.result,
@@ -73,6 +119,10 @@ class AuditEntry:
         }
         if self.replay_params is not None:
             d["replay_params"] = self.replay_params
+        if self.screen is not None:
+            d["screen"] = self.screen
+        if self.ui is not None:
+            d["ui"] = self.ui
         return d
 
 
@@ -100,6 +150,13 @@ class ComputerSandbox:
     allowed_apps: list[str] = field(default_factory=list)
     screen_region: tuple[int, int, int, int] | None = None
     last_screenshot: bytes | None = field(default=None, repr=False)
+    #: Fingerprint of the most recent screenshot.  Each recorded action captures
+    #: this value so the audit log can be grouped by functional screen.
+    current_screen: str | None = None
+    #: Content digest of the most recent accessibility tree read.  Captured onto
+    #: each action alongside ``current_screen``, and preferred by diagnosis when
+    #: present because it distinguishes content edits that look identical.
+    current_ui: str | None = None
     audit_log: list[AuditEntry] = field(default_factory=list)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -119,13 +176,28 @@ class ComputerSandbox:
 
     async def record_action(
         self,
-        action_type: ActionType,
+        action_type: "ActionType | str",
         params: dict[str, Any],
         result: str | None = None,
         error: str | None = None,
         replay_params: dict[str, Any] | None = None,
     ) -> AuditEntry:
-        """Append an entry to the audit log and return it."""
+        """Append an entry to the audit log and return it.
+
+        *action_type* may be an :class:`ActionType` or its string value, so code
+        outside the tool layer does not have to import the enum.  An
+        unrecognised value fails here, at the call site, rather than later as an
+        obscure serialisation error.
+        """
+        if not isinstance(action_type, ActionType):
+            try:
+                action_type = ActionType(action_type)
+            except ValueError:
+                raise ValueError(
+                    f"Unknown action type {action_type!r}. "
+                    f"Valid values: {sorted(a.value for a in ActionType)}"
+                ) from None
+
         entry = AuditEntry(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
@@ -135,6 +207,8 @@ class ComputerSandbox:
             result=result,
             error=error,
             replay_params=replay_params,
+            screen=self.current_screen,
+            ui=self.current_ui,
         )
         async with self._lock:
             self.audit_log.append(entry)

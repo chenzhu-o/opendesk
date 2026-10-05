@@ -209,6 +209,51 @@ class TestToolsRouteThroughComputer:
         assert synth.metadata.get("menu_path") == ["File", "Save"]
 
     @pytest.mark.asyncio
+    async def test_ui_failures_are_recorded_in_the_audit_log(self):
+        """A step that failed must appear in the log, not vanish from it.
+
+        The audit log is the training data. A step dropped on an unexpected
+        exception leaves a *clean-looking* trajectory with the failure simply
+        absent — worse than a failure that is visible and attributable.
+        """
+        from opendesk.computer.sandbox import clear_sandbox, get_sandbox
+        from opendesk.tools.ui import UITool
+
+        class BrokenComputer(FakeComputer):
+            async def ui_tree(self, *, window_id=None, app=None, max_depth=8):
+                raise AttributeError("backend returned a shape we did not expect")
+
+        clear_sandbox("ui-records-errors")
+        fake = BrokenComputer()
+        ctx = ToolContext(session_id="ui-records-errors", computer=fake)
+        tool = UITool()
+
+        result = await tool.execute(ctx, UITool.Params(action="get_tree", app="TextEdit"))
+        assert result.error
+        assert "AttributeError" in result.output
+
+        log = get_sandbox("ui-records-errors").export_audit_log()
+        assert len(log) == 1
+        assert log[0]["error"] and "AttributeError" in log[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_ui_expected_failure_is_recorded_too(self):
+        """The everyday failure: an element that is not there."""
+        from opendesk.computer.sandbox import clear_sandbox, get_sandbox
+        from opendesk.tools.ui import UITool
+
+        clear_sandbox("ui-records-missing")
+        ctx = ToolContext(session_id="ui-records-missing", computer=FakeComputer())
+        tool = UITool()
+
+        result = await tool.execute(
+            ctx, UITool.Params(action="click", app="TextEdit", title="Nonexistent"),
+        )
+        assert result.error
+        log = get_sandbox("ui-records-missing").export_audit_log()
+        assert len(log) == 1 and "Nonexistent" in log[0]["error"]
+
+    @pytest.mark.asyncio
     async def test_ui_click_falls_back_to_pointer_when_no_a11y(self):
         from opendesk.computer.base import CapabilityUnsupported
         from opendesk.tools.ui import UITool

@@ -84,6 +84,7 @@ nav:
     - Custom: integrations/custom.md
   - Tools:
     - tools/index.md
+    - system: tools/system.md
     - ui: tools/ui.md
     - screenshot: tools/screenshot.md
     - mouse: tools/mouse.md
@@ -92,7 +93,12 @@ nav:
     - clipboard: tools/clipboard.md
     - ocr: tools/ocr.md
     - audit: tools/audit.md
+    - skill: tools/skills.md
     - learn: tools/learn.md
+    - memory: tools/memory.md
+    - diagnose: tools/diagnose.md
+    - reward: tools/reward.md
+    - rollout: tools/rollout.md
   - Automation:
     - automation/index.md
     - In Claude Code: automation/claude-code.md
@@ -101,9 +107,11 @@ nav:
   - Architecture:
     - architecture/index.md
     - Computer & Tools: architecture/layers.md
+    - The Accessibility Channel: architecture/accessibility.md
     - Protocol Layer: architecture/protocol-layer.md
     - Remote & Integrations: architecture/remote-layer.md
     - Data Flow: architecture/data-flow.md
+    - Learning Layer: architecture/learning.md
     - Custom Tools: architecture/custom-tools.md
   - Protocol:
     - protocol/index.md
