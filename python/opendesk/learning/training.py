@@ -323,6 +323,7 @@ class Dataset:
                 ("below trust floor", "dropped_low_trust"),
                 ("no verifiable success", "dropped_unsuccessful"),
                 ("pair without trajectory", "dropped_unmatched"),
+                ("pair not sharing a prompt", "dropped_prompt_mismatch"),
             ) if s.get(key)
         ]
         if dropped:
@@ -399,6 +400,7 @@ def build_dataset(
     min_trust: str = DEFAULT_MIN_TRUST,
     drop_degenerate: bool = True,
     resolver: Optional[Callable[[dict[str, Any]], Optional[str]]] = None,
+    prompt_resolver: Optional[Callable[[dict[str, Any]], Optional[str]]] = None,
     sanitize: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
 ) -> Dataset:
     """Assemble training rows from trajectories (and pairs, for ``dpo``).
@@ -434,6 +436,17 @@ def build_dataset(
         for that episode.  When it returns text, the row is marked
         ``completion_source="caller"``; when it returns ``None`` the canonical
         rendering is used.
+    prompt_resolver:
+        Optional ``episode -> str | None`` returning the *observation* the
+        policy conditioned on — the accessibility tree, the screenshot
+        description, the steps taken so far.  Without it a prompt is the task
+        text alone, which every attempt at that task shares; each row then says
+        "do this task" with no state, so nothing in the dataset distinguishes a
+        good action from a bad one and only the output format is learnable.
+        opendesk stores no screen content, so the observation has to come from
+        the caller.  This is the prompt-side counterpart of *resolver*, and the
+        two are needed together for per-step GUI data: one supplies the state,
+        the other the response the policy actually produced in it.
     sanitize:
         Optional ``episode -> episode`` applied before rendering, for scrubbing
         what should not be memorised.  The audit log holds absolute paths, so a
@@ -459,6 +472,7 @@ def build_dataset(
         "dropped_low_trust": 0,
         "dropped_unsuccessful": 0,
         "dropped_unmatched": 0,
+        "dropped_prompt_mismatch": 0,
         "by_trust": {},
         "weak_signal": 0,
         "groups_no_spread": 0,
@@ -475,6 +489,13 @@ def build_dataset(
             if text:
                 return text, "caller"
         return render_completion(episode), RENDER_VERSION
+
+    def prompt_of(episode: dict[str, Any]) -> str:
+        if prompt_resolver is not None:
+            text = prompt_resolver(episode)
+            if text:
+                return text
+        return render_prompt(episode)
 
     def trusted(episode: dict[str, Any]) -> bool:
         t = trust_of(episode)
@@ -495,7 +516,7 @@ def build_dataset(
                 continue
             text, source = completion(episode)
             rows.append({
-                "prompt": render_prompt(episode),
+                "prompt": prompt_of(episode),
                 "completion": text,
                 "task": episode.get("task"),
                 "group_id": episode.get("task"),
@@ -520,6 +541,16 @@ def build_dataset(
             if not (trusted(chosen) and trusted(rejected)):
                 stats["dropped_low_trust"] += 1
                 continue
+            chosen_prompt = prompt_of(chosen)
+            rejected_prompt = prompt_of(rejected)
+            if chosen_prompt != rejected_prompt:
+                # A preference pair only means something if both completions
+                # answer the *same* prompt.  With a caller-supplied
+                # prompt_resolver the two episodes can be different states of
+                # the task, and an action taken in one state compared against an
+                # action taken in another teaches nothing about either.
+                stats["dropped_prompt_mismatch"] += 1
+                continue
             chosen_text, chosen_src = completion(chosen)
             rejected_text, rejected_src = completion(rejected)
             if chosen_text == rejected_text:
@@ -531,7 +562,7 @@ def build_dataset(
                 if drop_degenerate:
                     continue
             rows.append({
-                "prompt": render_prompt(chosen),
+                "prompt": chosen_prompt,
                 "chosen": chosen_text,
                 "rejected": rejected_text,
                 "task": chosen.get("task"),
@@ -585,7 +616,7 @@ def build_dataset(
                 # only the caller knows which loss it is running.
                 stats["groups_no_spread"] += 1
             rows.append({
-                "prompt": render_prompt(members[0]),
+                "prompt": prompt_of(members[0]),
                 "group_id": task,
                 "task": task,
                 "reward_spec": members[0].get("reward_spec"),

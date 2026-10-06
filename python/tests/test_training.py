@@ -321,6 +321,33 @@ class TestSFT:
         )
         assert job.rows[0]["completion_source"] == training.RENDER_VERSION
 
+    def test_prompt_resolver_supplies_the_observation(self):
+        """Without the observation every prompt for a task is identical, so
+        nothing in the row separates a good action from a bad one."""
+        job = training.build_dataset(
+            [episode("ok")], format="sft",
+            prompt_resolver=lambda ep: "OBSERVATION: window Invoices",
+        )
+        assert job.rows[0]["prompt"] == "OBSERVATION: window Invoices"
+
+    def test_prompt_resolver_returning_none_falls_back(self):
+        job = training.build_dataset(
+            [episode("ok")], format="sft", prompt_resolver=lambda ep: None
+        )
+        assert job.rows[0]["prompt"] == training.render_prompt(episode("ok"))
+
+    def test_prompt_and_completion_resolvers_together(self):
+        """The pair of hooks is what per-step GUI data needs: one supplies the
+        state, the other the response the policy produced in that state."""
+        job = training.build_dataset(
+            [episode("ok")], format="sft",
+            prompt_resolver=lambda ep: "STATE",
+            resolver=lambda ep: "ACTION",
+        )
+        row = job.rows[0]
+        assert (row["prompt"], row["completion"]) == ("STATE", "ACTION")
+        assert row["completion_source"] == "caller"
+
 
 # ---------------------------------------------------------------------------
 # DPO
@@ -365,6 +392,29 @@ class TestDPO:
     def test_dpo_without_pairs_is_an_error(self):
         with pytest.raises(ValueError, match="needs pairs"):
             training.build_dataset([episode("c1")], format="dpo")
+
+    def test_pair_whose_sides_do_not_share_a_prompt_is_dropped(self):
+        """A prompt_resolver can make the two sides different states of the
+        task.  Comparing an action taken in one state against one taken in
+        another is not a preference, so the pair must not reach the trainer."""
+        states = {"c1": "STATE A", "r1": "STATE B"}
+        job = training.build_dataset(
+            [episode("c1", actions=A_OK), episode("r1", reward=0.0, actions=A_BAD)],
+            pairs=[pair(A_OK, A_BAD)], format="dpo",
+            prompt_resolver=lambda ep: states[ep["episode_id"]],
+        )
+        assert job.rows == []
+        assert job.stats["dropped_prompt_mismatch"] == 1
+        assert "not sharing a prompt" in job.summary_text()
+
+    def test_pair_sharing_a_prompt_survives_a_prompt_resolver(self):
+        job = training.build_dataset(
+            [episode("c1", actions=A_OK), episode("r1", reward=0.0, actions=A_BAD)],
+            pairs=[pair(A_OK, A_BAD)], format="dpo",
+            prompt_resolver=lambda ep: "SHARED STATE",
+        )
+        assert len(job.rows) == 1
+        assert job.rows[0]["prompt"] == "SHARED STATE"
 
     def test_no_label_leaks_into_either_side(self):
         job = training.build_dataset(
@@ -484,6 +534,13 @@ class TestGRPO:
         )
         c = job.rows[0]["completions"][0]
         assert len(c["returns"]) == c["steps"] == 3
+
+    def test_prompt_resolver_applies_to_the_group_prompt(self):
+        job = training.build_dataset(
+            [episode("a1", task="T"), episode("a2", task="T", reward=0.0)],
+            format="grpo", prompt_resolver=lambda ep: "STATE",
+        )
+        assert job.rows[0]["prompt"] == "STATE"
 
 
 # ---------------------------------------------------------------------------
