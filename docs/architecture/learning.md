@@ -91,6 +91,9 @@ Episodes close with an outcome reward, process metrics, and a full step
 sequence. `rollout` writes them as JSONL with per-step rewards and discounted
 returns, and pairs repeated attempts into chosen/rejected examples.
 
+`rollout(action="dataset")` goes the last mile and renders those into
+trainer-ready rows — see [The Training Handoff](training.md).
+
 See [`rollout`](../tools/rollout.md).
 
 ### 4. Agent-declared assertions (`assert`)
@@ -153,6 +156,7 @@ mode — see [`reward`](../tools/reward.md#goal-states).
 | `opendesk.learning.trajectories` | Episode lifecycle, JSONL export |
 | `opendesk.learning.preference` | Ranking, pairing, best-of-N driver |
 | `opendesk.learning.assertions` | Agent-declared claims, calibration, regressions |
+| `opendesk.learning.training` | Dataset rows for a trainer (SFT / DPO / GRPO) |
 | `opendesk.computer.diagnostics` | State-transition graph |
 | `opendesk.computer.observations` | Lossless visual memory |
 

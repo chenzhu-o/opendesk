@@ -8,6 +8,7 @@ attempt scored and what the agent claimed about its own state.
 python examples/learning-eval/run.py
 python examples/learning-eval/run.py --verbose
 python examples/learning-eval/run.py --export runs/        # one trajectory per attempt
+python examples/learning-eval/run.py --dataset data/       # sft / dpo / grpo rows
 python examples/learning-eval/run.py --keep --root /tmp/x  # inspect the files
 ```
 
@@ -87,6 +88,58 @@ The same machinery is what the GUI tools feed: the same check kinds, the same
 audit log, the same export. With no screenshots, `score_process` falls back to
 inferring effects from the actions themselves and reports
 `signal_source: "action"` — the documented path for a CLI-only session.
+
+## From attempts to training rows
+
+`--dataset` runs the same four tasks and then does the last mile: it exports the
+trajectories as JSONL, reads them back with `training.load_trajectories`, and
+renders three datasets — one per row shape a trainer reads.
+
+```
+  Training datasets → data/
+
+  8 sft row(s) from 12 episode(s)
+    tasks 3  groups 3  successes 8
+    dropped: 4 no verifiable success
+    effect signal: action=8
+    note: 8 row(s) have an inferred or unrecorded effect signal; set
+          min_trust='screen' to require observed effects.
+
+  A completion holds actions only — no reward, no return:
+    file_write(action="write_file", content="old\n", path="rename-log/app.log")
+    file_move(action="move", dst="rename-log/app.log.bak", path="rename-log/app.log")
+    (labels live beside it: reward=1.0, returns=[10.305, 9.9])
+```
+
+Three things this run demonstrates that a description would not:
+
+**The labels stay out of the text.** The completion above is the agent's
+actions; the reward and the discounted returns sit beside it in the row. Put
+them *in* the text and the cheapest way for DPO to raise its log-probability
+difference is to print `reward="1"` — see
+[the training handoff](../../docs/architecture/training.md).
+
+**Trust is reported, not enforced.** Every step here is scored from the
+non-visual fallback (`signal_source: "action"`), because a CLI-only harness has
+no screenshots and `score_process` infers effects from the actions themselves.
+The rows are still produced — SFT and DPO do not train on the step signal at
+all — and the manifest says so. `min_trust='screen'` would keep **0** of the 4
+GRPO rows, which is what that floor is for.
+
+**Paths are scrubbed before rendering.** Each attempt lives in its own directory
+under `--root`, and the audit log records those absolutely. The run passes a
+`sanitize` callback that rewrites the whole record — so the completion above
+reads `rename-log/app.log`, not
+`<tmp>/opendesk-eval-jwcw5kxa/rename-log/attempt0/app.log`.
+
+Two prefixes have to go, and the second is the subtle one:
+
+- the **root**, because it is a temp directory whose name changes per run;
+- the **`attemptN/` segment**, because the attempt number is an artefact of this
+  harness, not a property of the task. Left in, three tries at one task render as
+  three *different* completions — so identical behaviour never looks identical
+  and the check that drops degenerate DPO pairs can never fire. On this run every
+  GRPO group went from three distinct texts to one.
 
 ## Reading a failure
 

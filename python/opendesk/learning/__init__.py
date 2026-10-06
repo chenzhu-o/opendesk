@@ -13,6 +13,7 @@ Modules
 ``trajectories`` episode lifecycle and RL-ready trajectory export
 ``preference``   best-of-N rollouts and preference pairs
 ``assertions``   claims the agent makes about the state, verified and scored
+``training``     dataset rows for a trainer (SFT / DPO / GRPO)
 
 Nothing here calls a model.  Every signal is derived from observable state
 (files, shell output, the accessibility tree, screenshots).
@@ -21,5 +22,6 @@ Nothing here calls a model.  Every signal is derived from observable state
 from __future__ import annotations
 
 __all__ = [
-    "rewards", "goal_state", "process", "trajectories", "preference", "assertions",
+    "rewards", "goal_state", "process", "trajectories", "preference",
+    "assertions", "training",
 ]

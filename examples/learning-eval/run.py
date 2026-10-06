@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import shutil
 import sys
 import tempfile
@@ -54,7 +55,9 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 from opendesk.computer.sandbox import clear_sandbox  # noqa: E402
-from opendesk.learning import assertions, preference, trajectories  # noqa: E402
+from opendesk.learning import (  # noqa: E402
+    assertions, preference, trajectories, training,
+)
 from opendesk.tools.base import allow_all_context  # noqa: E402
 from opendesk.tools.reward import RewardTool  # noqa: E402
 from opendesk.tools.rollout import RolloutTool  # noqa: E402
@@ -380,6 +383,147 @@ def build_preferences(episodes: list[Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# The training handoff
+# ---------------------------------------------------------------------------
+
+async def export_datasets(
+    episodes: list[Any],
+    results: list[AttemptResult],
+    dest: Path,
+    *,
+    rollout_tool: RolloutTool,
+    root: Path,
+) -> None:
+    """Render this run into trainer-ready rows, via the files, not around them.
+
+    Deliberately two steps rather than one: export the trajectories the way a
+    real session would, then read them back with ``load_trajectories``.  If the
+    writers and the reader ever drift apart, this breaks — which is the point.
+    """
+    traj_dir = dest / "trajectories"
+    traj_dir.mkdir(parents=True, exist_ok=True)
+    for r, episode in zip(results, episodes):
+        ctx = allow_all_context(episode.session_id)
+        await rollout_tool.execute(ctx, rollout_tool.parse_params({
+            "action": "export", "episode_id": episode.id,
+            "path": str(traj_dir / f"{r.task}-{r.attempt}.jsonl"),
+        }))
+    records = training.load_trajectories(str(traj_dir))
+
+    # Every attempt lives in its own directory under `root`, and the audit log
+    # records those absolutely.  Two things have to go before rendering:
+    #
+    #   * the root, because it is a temp directory whose name changes per run;
+    #   * the `attemptN/` segment, because the attempt number is an artefact of
+    #     this harness rather than a property of the task.  Left in, three tries
+    #     at the same task render as three different completions, so identical
+    #     behaviour never looks identical and the degenerate-pair check in
+    #     build_dataset can never fire.
+    needle = str(root)
+    attempt_seg = re.compile(r"attempt\d+[\\/]")
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, str):
+            if needle in value:
+                for sep in ("\\", "/"):
+                    if value.startswith(needle + sep):
+                        value = value[len(needle) + 1:]
+                        break
+                else:
+                    value = value.replace(needle, "<sandbox>")
+            return attempt_seg.sub("", value)
+        if isinstance(value, dict):
+            return {k: scrub(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [scrub(v) for v in value]
+        return value
+
+    def sanitize(episode: dict[str, Any]) -> dict[str, Any]:
+        # Applied to the whole record, not just the step params: `reward_spec`
+        # carries the same absolute paths, and for grpo that spec is the thing a
+        # trainer sends back to re-verify.
+        return scrub(episode)
+
+    # Pair every task that ran more than once, over all its attempts.
+    by_task: dict[str, list[Any]] = {}
+    for episode in episodes:
+        by_task.setdefault(episode.task, []).append(episode)
+    pairs: list[Any] = []
+    for eps in by_task.values():
+        if len(eps) < 2:
+            continue
+        dataset = preference.build_pairs(
+            [preference.Rollout.from_episode(e) for e in eps],
+            strategy="all_vs_best",
+        )
+        pairs.extend(dataset.pairs)
+    pref_path = dest / "preferences.jsonl"
+    preference.export_pairs(
+        preference.PreferenceDataset(pairs=pairs), path=str(pref_path)
+    )
+
+    jobs = {
+        "sft": training.build_dataset(records, format="sft", sanitize=sanitize),
+        "dpo": training.build_dataset(
+            records, pairs=training.load_pairs(str(pref_path)), format="dpo",
+            sanitize=sanitize,
+        ),
+        "grpo": training.build_dataset(records, format="grpo", sanitize=sanitize),
+    }
+
+    print()
+    print(f"Training datasets → {dest}")
+    for name, job in jobs.items():
+        manifest = training.export_jsonl(
+            job.rows, str(dest / f"{name}.jsonl"), manifest=job.stats
+        )
+        print()
+        for line in job.summary_text().splitlines():
+            print(f"  {line}")
+        print(f"  wrote {manifest['rows']} row(s) to {manifest['path']}")
+
+    # A completion is the actions and nothing else.  Worth showing rather than
+    # asserting: the labels that would make this row look "informative" are all
+    # one key away, in chosens/reward metadata, deliberately out of the text.
+    if jobs["sft"].rows:
+        row = jobs["sft"].rows[0]
+        print()
+        print("  A completion holds actions only — no reward, no return:")
+        for line in row["completion"].splitlines():
+            print(f"    {line}")
+        print(f"    (labels live beside it: reward={row['reward']}, "
+              f"returns={row['returns']})")
+
+    if jobs["grpo"].rows:
+        row = jobs["grpo"].rows[0]
+        print()
+        print(f"  A grpo row holds a whole group: "
+              f"{len(row['completions'])} attempt(s) of {row['task'][:40]!r}, "
+              f"rewards={row['rewards']}, spread={row['reward_spread']}")
+        flat = jobs["grpo"].stats["groups_no_spread"]
+        if flat:
+            print(f"  {flat} of {len(jobs['grpo'].rows)} group(s) are all-tied "
+                  f"(spread 0) — kept and flagged, not silently dropped.")
+
+    parts = training.split_rows(jobs["sft"].rows, val_ratio=0.25)
+    print()
+    print("  Task-level split (val 25%): "
+          + ", ".join(f"{k}={len(v)}" for k, v in parts.items()))
+    print("  Split by task, not by row: attempts at one task are near-duplicates,")
+    print("  so splitting them leaks the eval set into training.")
+
+    # The step signal here is the non-visual fallback — this harness has no
+    # screenshots — so `min_trust` has something real to exclude.  Reported
+    # rather than applied, because sft and dpo do not train on the step signal
+    # at all and silently dropping their rows would be the worse failure.
+    strict = training.build_dataset(records, format="grpo", min_trust="screen")
+    print()
+    print(f"  min_trust='screen' would keep {len(strict.rows)} of "
+          f"{len(jobs['grpo'].rows)} grpo row(s) here — a CLI-only run infers "
+          f"its step effects rather than observing them.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -418,6 +562,13 @@ async def main_async(args: argparse.Namespace, tasks: list[Task]) -> int:
         print()
         print(f"Exported {exported} trajectory file(s) to {dest}")
 
+    if args.dataset:
+        dest = Path(args.dataset)
+        dest.mkdir(parents=True, exist_ok=True)
+        await export_datasets(
+            episodes, results, dest, rollout_tool=RolloutTool(), root=root
+        )
+
     if args.keep:
         print(f"\nKept working directory: {root}")
     else:
@@ -437,6 +588,8 @@ def main() -> int:
                    help="also print per-attempt effects and diagnosis signal")
     p.add_argument("--export", default=None,
                    help="write one trajectory JSONL per attempt to this directory")
+    p.add_argument("--dataset", default=None,
+                   help="write trainer-ready sft/dpo/grpo datasets to this directory")
     p.add_argument("--filter", default=None,
                    help="only run tasks whose name contains this substring")
     args = p.parse_args()

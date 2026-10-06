@@ -13,10 +13,12 @@ See [ui-testing/](ui-testing/) for setup and examples.
 ## Learning-layer evaluation
 
 A runnable harness for the reward, process-reward and preference machinery —
-four tasks, three attempts each, no GUI required.
+four tasks, three attempts each, no GUI required. Pass `--dataset` to also render
+the run into SFT / DPO / GRPO rows.
 
 ```bash
 python examples/learning-eval/run.py
+python examples/learning-eval/run.py --dataset data/
 ```
 
 See [learning-eval/](learning-eval/) for what it measures and, more importantly,

@@ -77,6 +77,7 @@ class ActionType(str, Enum):
     GOAL_SCORE = "goal_score"
     ROLLOUT_EXPORT = "rollout_export"
     PREFERENCE_BUILD = "preference_build"
+    DATASET_BUILD = "dataset_build"
 
 
 @dataclass

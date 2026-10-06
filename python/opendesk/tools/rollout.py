@@ -11,6 +11,7 @@ Example::
 
 from __future__ import annotations
 
+import os
 from typing import Literal, Optional
 
 from pydantic import Field
@@ -28,16 +29,21 @@ class RolloutTool(Tool):
         "                    with per-step reward and discounted return\n"
         "  action='rank'   — rank episodes best-first (best-of-N view)\n"
         "  action='pairs'  — build chosen/rejected preference pairs from episodes\n"
+        "  action='dataset'— write trainer-ready rows (sft / dpo / grpo)\n"
         "  action='list'   — list episodes available for export\n\n"
         "Screenshots are written as PNG files next to the JSONL by default; pass "
         "embed_images=true for one self-contained file.\n\n"
         "Typical flow: run a task as an episode with the 'reward' tool, repeat it "
         "a few times, then build pairs — attempts that satisfied the checklist "
-        "become the chosen examples, and shorter successful runs win ties."
+        "become the chosen examples, and shorter successful runs win ties. "
+        "'dataset' goes one step further and renders those into the row shape a "
+        "trainer reads; a completion holds the agent's actions only, never the "
+        "rewards, because a model trained on the reward tokens learns to emit "
+        "them instead of solving the task."
     )
 
     class Params(Tool.Params):
-        action: Literal["export", "rank", "pairs", "list"] = Field(
+        action: Literal["export", "rank", "pairs", "dataset", "list"] = Field(
             default="export", description="What to do."
         )
         episode_id: Optional[str] = Field(
@@ -75,12 +81,44 @@ class RolloutTool(Tool):
             default=False,
             description="Include episodes that were never closed (reward unknown).",
         )
+        format: Literal["sft", "dpo", "grpo"] = Field(
+            default="sft",
+            description=(
+                "For 'dataset': 'sft' (prompt→completion, successful attempts "
+                "only), 'dpo' (prompt→chosen/rejected from the pairs), or 'grpo' "
+                "(one row per task holding every attempt and its reward)."
+            ),
+        )
+        min_trust: Optional[Literal["ui", "screen", "action"]] = Field(
+            default=None,
+            description=(
+                "For 'dataset': require step effects to have been read from at "
+                "least this signal. Omit to keep everything and report the "
+                "split — rows always carry a 'trust' field. Worth setting to "
+                "'screen' for grpo, where the per-step returns are the signal."
+            ),
+        )
+        min_reward: float = Field(
+            default=1.0, description="For 'dataset' sft: minimum outcome reward."
+        )
+        val_ratio: float = Field(
+            default=0.0,
+            description=(
+                "For 'dataset': hold out this share for validation. Splits by "
+                "task, not by row — attempts at one task are near-duplicates, so "
+                "splitting them leaks the eval set into training."
+            ),
+        )
+        test_ratio: float = Field(
+            default=0.0, description="For 'dataset': hold out this share for test."
+        )
 
     async def execute(self, ctx: ToolContext, params: "RolloutTool.Params") -> ToolResult:
         handler = {
             "export": self._export,
             "rank": self._rank,
             "pairs": self._pairs,
+            "dataset": self._dataset,
             "list": self._list,
         }[params.action]
         return await handler(ctx, params)
@@ -247,6 +285,104 @@ class RolloutTool(Tool):
             title=f"{manifest['pairs']} preference pair(s)",
             output="\n".join(lines),
             metadata=manifest,
+        )
+
+    async def _dataset(self, ctx, params) -> ToolResult:
+        from opendesk.computer.observations import get_store
+        from opendesk.computer.sandbox import get_sandbox
+        from opendesk.learning import training
+        from opendesk.learning import trajectories as T
+        from opendesk.learning.assertions import for_episode
+        from opendesk.learning.preference import Rollout, build_pairs
+
+        eps = self._episodes(ctx, params)
+        if not eps:
+            return ToolResult(
+                title="Dataset",
+                output=(
+                    "No closed episodes to build from. Run the task with the "
+                    "'reward' tool first (begin → work → end)."
+                ),
+                error=True,
+            )
+
+        sandbox = get_sandbox(ctx.session_id)
+        store = get_store(ctx.session_id)
+        entries = sandbox.export_audit_log()
+        records = [
+            T.build_trajectory(
+                ep, entries=entries, store=store, process=ep.process,
+                assertions=for_episode(ep.id, ctx.session_id),
+            )
+            for ep in eps
+        ]
+
+        pairs = None
+        if params.format == "dpo":
+            dataset = build_pairs(
+                [Rollout.from_episode(e) for e in eps],
+                min_margin=params.min_margin, max_pairs=params.max_pairs,
+                strategy=params.strategy,
+            )
+            if not dataset.pairs:
+                return ToolResult(
+                    title="Dataset",
+                    output=(
+                        f"dpo needs at least two attempts that differ; "
+                        f"{len(eps)} episode(s) produced no pairs. Run the task "
+                        f"again, or add checks that discriminate between runs."
+                    ),
+                    error=True,
+                )
+            pairs = [p.to_dict() for p in dataset.pairs]
+
+        try:
+            job = training.build_dataset(
+                records, pairs=pairs, format=params.format,
+                min_reward=params.min_reward, min_trust=params.min_trust,
+            )
+        except ValueError as exc:
+            return ToolResult(title="Dataset", output=str(exc), error=True)
+
+        if not job.rows:
+            return ToolResult(
+                title="Dataset",
+                output=job.summary_text(),
+                metadata=job.stats,
+            )
+
+        stem = params.path or f"./opendesk-rollouts/{params.format}.jsonl"
+        await self._audit(
+            ctx, "dataset_build", {"format": params.format},
+            f"{len(job.rows)} rows",
+        )
+
+        lines = [job.summary_text(), ""]
+        if params.val_ratio or params.test_ratio:
+            parts = training.split_rows(
+                job.rows, val_ratio=params.val_ratio,
+                test_ratio=params.test_ratio,
+            )
+            base, ext = os.path.splitext(stem)
+            written = {}
+            for where, rows in parts.items():
+                m = training.export_jsonl(
+                    rows, f"{base}.{where}{ext}", manifest=job.stats
+                )
+                written[where] = m
+                lines.append(f"  {where:<5} {len(rows):>4} row(s)  {m['path']}")
+            metadata = {"splits": {k: len(v) for k, v in parts.items()},
+                        **job.stats}
+        else:
+            m = training.export_jsonl(job.rows, stem, manifest=job.stats)
+            lines.append(f"Wrote {m['rows']} row(s) to {m['path']}")
+            lines.append(f"  manifest: {m['path']}.manifest.json")
+            metadata = m
+
+        return ToolResult(
+            title=f"{len(job.rows)} {params.format} row(s)",
+            output="\n".join(lines),
+            metadata=metadata,
         )
 
     async def _list(self, ctx, params) -> ToolResult:

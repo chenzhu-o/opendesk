@@ -131,7 +131,41 @@ Two kinds of pair result:
 | `export` | `episode_id?`, `path?`, `image_dir?`, `embed_images?` | Write a trajectory |
 | `rank` | `task?` | Rank attempts best-first |
 | `pairs` | `task?`, `path?`, `strategy?`, `min_margin?`, `max_pairs?` | Build preference pairs |
+| `dataset` | `format?`, `path?`, `min_trust?`, `min_reward?`, `val_ratio?`, `test_ratio?`, `strategy?` | Write trainer-ready rows |
 | `list` | `task?` | Show exportable episodes |
+
+## The `dataset` action
+
+`export` and `pairs` produce the environment half — trajectories and preference
+pairs. `dataset` is the last mile: it renders those into the row shape a trainer
+reads, in one of three formats.
+
+```json
+{"action": "dataset", "format": "dpo", "path": "runs/dpo.jsonl",
+ "strategy": "all_vs_best", "val_ratio": 0.2}
+```
+
+| `format` | Rows | Trains on |
+|---|---|---|
+| `sft` | `prompt` → `completion`, successful attempts only | the outcome reward |
+| `dpo` | `prompt` → `chosen` / `rejected`, joined from the pairs | which attempt passed |
+| `grpo` | one row per task: every attempt, its reward, its returns | the per-step returns |
+
+A **completion holds the agent's actions and nothing else**. Every other field in
+a trajectory — per-step reward, return, effect, outcome — is a label, and a model
+trained on the labels learns to emit them instead of solving the task. The labels
+move to the row's metadata, where a loss can still use them.
+
+Setting `val_ratio` or `test_ratio` writes one file per split and splits **by
+task**, not by row: attempts at one task are near-duplicates, so splitting them
+across train and eval leaks the evaluation set into training.
+
+A `<path>.manifest.json` is written alongside the data with the render version,
+the trust tally and what was dropped.
+
+See [The Training Handoff](../architecture/training.md) for the full picture —
+including why a canonical rendering is not the policy's own tokens, and what to
+do about it.
 
 ## Examples
 
@@ -172,3 +206,7 @@ transitions = [
 
 The format is deliberately plain JSONL — no framework import, no schema
 registry. `verl`, `TRL`, `OpenRLHF` and a hand-written loop can all read it.
+
+For the step after this — rendering those trajectories into rows a trainer reads
+directly — see [The Training Handoff](../architecture/training.md) and the
+`dataset` action above.

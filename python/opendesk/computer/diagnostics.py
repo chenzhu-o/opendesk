@@ -59,8 +59,9 @@ DEFAULT_TOLERANCE = 4
 #: state graph and from exported trajectories entirely.
 JOURNAL_ACTIONS = frozenset({
     "episode_begin", "episode_end", "reward_check", "goal_capture",
-    "goal_score", "preference_build", "rollout_export", "diagnose",
-    "memory_recall", "memory_diff", "memory_clear", "assertion", "assertions",
+    "goal_score", "preference_build", "rollout_export", "dataset_build",
+    "diagnose", "memory_recall", "memory_diff", "memory_clear", "assertion",
+    "assertions",
 })
 
 #: Real agent actions that observe rather than act.  They belong in a
