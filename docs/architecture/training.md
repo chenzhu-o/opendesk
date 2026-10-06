@@ -287,6 +287,47 @@ It writes one file per split when a ratio is set, and a
 tally and the row count. A directory of `.jsonl` with no record of which
 renderer or floor produced it is not reproducible.
 
+## Folding in the observation
+
+`render_prompt` is the task and goal, because the per-step observation lives in
+your harness. When you fold it back in — a `prompt_resolver` returning the
+accessibility tree — the budget you give it decides what the row can teach, and
+the failure is quiet: a truncated observation does not look broken, it looks
+like a model that will not learn.
+
+Measured on 2228 recorded steps, asking whether the gold action's coordinate is
+present in the text the model actually receives:
+
+| observation budget | targets visible |
+|---|---|
+| 3 000 chars | 30.4% |
+| 6 000 chars | 43.6% |
+| 12 000 chars | 53.1% |
+| uncapped | 53.1% |
+
+Two things follow. A 3 000-character tree hides two thirds of the targets, so
+most rows ask for a coordinate that cannot be read off the input at all. And the
+ceiling saturates: past roughly 12 000 characters no further target becomes
+visible, because the remaining ones are absent from the tree itself — so about
+47% of coordinate actions are unpredictable from this observation by
+construction, whatever model is applied to it.
+
+The tree is also larger than it looks in a rendered prompt, so the character
+budget is not the only cut. A 3 000-character tree costs about 1 769 prompt
+tokens; a token cap set below that truncates the same text a second time,
+leaving less than half of an already-halved observation.
+
+Two reporting habits catch this before it costs a training run:
+
+* **Put a floor next to the score.** `func_match` compares call *names* — the
+  regex captures the identifier, not the arguments — so on a small action
+  vocabulary it largely measures the base rate. A predictor that emits one verb
+  unconditionally scored 0.430 against a fine-tuned model's 0.415. The model sat
+  below a constant, and neither number was wrong on its own.
+* **Report per-verb recall, not only the pooled figure.** The same run scored
+  0.814 on the most common verb, 0.038 on the next, and 0.000 on five more. It
+  had learned which action was most common, not which action to take.
+
 ## What this will not do
 
 - **No gradients, no tokenizer, no framework import.** The output is JSONL. If
