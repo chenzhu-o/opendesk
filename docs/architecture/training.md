@@ -357,11 +357,21 @@ targets remain absent from accessibility trees; generation metrics must be read
 with `floor`, per-verb recall, and `visible_target_rate` alongside pooled
 `func_match`.
 
-**First successful training pass (v10, cap 4608).** Worst-row probing picked
-4608 prompt tokens (~3.7 GiB headroom on the probe). After one epoch: held-out
-teacher-forced NLL dropped from 4.49 → 0.98 (token accuracy 0.40 → 0.73).
-In-loop epoch eval was removed in v11 — it OOM'd from fragmentation after epoch 1
-while the training steps themselves fit.
+**Reference Kaggle run (v11, COMPLETE).** Worst-row VRAM probe chose **4608**
+prompt tokens (12800-char tree budget). AdamW8bit, 2 epochs, 256 min on T4.
+
+| metric | before | after |
+|---|---|---|
+| held-out NLL | 4.49 | **0.82** |
+| token accuracy | 0.40 | **0.78** |
+| generation `func_match` (n=200) | 0.0 | **0.475** |
+| vs strongest constant floor (0.43) | −0.43 | **+0.045** |
+| `Agent.click` verb recall | 0.0 | **0.90** |
+
+Generation remains click-heavy (modal tuned name 63% `Agent.click`); abstract-tool
+rows did not move. Coordinate visibility in eval prompts was **48.3%** of gold
+targets — read `func_match` together with floor and per-verb recall. Full
+numbers: `kaggle/opendesk-sft/v11_metrics.json`.
 
 ## What this will not do
 
