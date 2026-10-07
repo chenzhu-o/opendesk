@@ -328,6 +328,35 @@ Two reporting habits catch this before it costs a training run:
   0.814 on the most common verb, 0.038 on the next, and 0.000 on five more. It
   had learned which action was most common, not which action to take.
 
+## Remote SFT on a T4 (Kaggle)
+
+Reference run: `markov-ai/computer-use` → `training.build_dataset` → full
+fine-tune of Qwen2.5-0.5B-Instruct on a 14.56 GiB Tesla T4.
+
+**Observation budget vs VRAM.** With the tree folded in at 12 800 characters,
+most rows need thousands of prompt tokens. On sm_75 the attention peak scales
+with sequence length squared; a 7168-token row can request ~2.7 GiB for a single
+attention materialisation, on top of ~8 GiB for fp32 weights, gradients, and
+AdamW state. Practical mitigations that kept the run honest:
+
+* memory-efficient SDPA (flash is unavailable below sm_80);
+* 8-bit AdamW optimizer state;
+* LM-head loss only on supervised completion tokens (not the full vocabulary
+  projection over the prompt);
+* **probe the worst real training row** at each candidate prompt cap before
+  building the dataset — synthetic probes that shorten the completion lied (v9
+  passed at 6144 then OOM'd on step 2).
+
+**Honest baselines at full tree budget (before cap downshift).** An untrained
+model at the expanded observation budget scored held-out NLL ≈ 4.22 and
+`func_match` 0.0 — the earlier ~0.45 figure was a truncation artefact (marginal
+click rate with no usable coordinates in the input).
+
+**Ceiling still applies.** Even with cap chosen to fit VRAM, ~47% of coordinate
+targets remain absent from accessibility trees; generation metrics must be read
+with `floor`, per-verb recall, and `visible_target_rate` alongside pooled
+`func_match`.
+
 ## What this will not do
 
 - **No gradients, no tokenizer, no framework import.** The output is JSONL. If
