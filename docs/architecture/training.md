@@ -357,6 +357,12 @@ targets remain absent from accessibility trees; generation metrics must be read
 with `floor`, per-verb recall, and `visible_target_rate` alongside pooled
 `func_match`.
 
+**First successful training pass (v10, cap 4608).** Worst-row probing picked
+4608 prompt tokens (~3.7 GiB headroom on the probe). After one epoch: held-out
+teacher-forced NLL dropped from 4.49 → 0.98 (token accuracy 0.40 → 0.73).
+In-loop epoch eval was removed in v11 — it OOM'd from fragmentation after epoch 1
+while the training steps themselves fit.
+
 ## What this will not do
 
 - **No gradients, no tokenizer, no framework import.** The output is JSONL. If
