@@ -378,16 +378,20 @@ numbers: `kaggle/opendesk-sft/v11_metrics.json`.
 The **`kaggle/opendesk-rl`** script closes the preference loop when only one
 successful rollout exists per task:
 
-1. Build rows with `build_dataset(..., format="dpo")` after attaching synthetic
-   **hard negatives** (gold vs modal `Agent.click` / wrong coordinates) on the
-   **same prompt**.
+1. Build rows with `build_dataset(..., format="dpo")` after
+   `action_rewards.hard_negative(gold, tree)` — rejected strings are chosen to
+   **minimise verifiable step reward** (wrong verb, wrong `*Tools.*` call, bad
+   coordinates when the gold target is visible in the tree).
 2. One-epoch SFT warm-start (4608-token cap, T4-safe).
 3. **Ref-free DPO** on one model — no reference copy — using length-normalised
-   log-ratio on completion tokens.
+   log-ratio on completion tokens; pair `margin` comes from
+   `chosen_reward - rejected_reward`.
 
-Production RL should replace synthetic negatives with `preference.best_of_n` +
-`export_pairs` once multiple rollouts per task exist; GRPO rows from
-`format="grpo"` need reward spread within a task group.
+**What this teaches vs what it does not:** step-level preferences improve
+*which call to emit on this screen*, not full task success. Multi-step credit
+and terminal success belong to live rollouts scored with `rewards` (RLVR) and
+`process` (step effects), then exported via `preference.best_of_n` or GRPO
+(`format="grpo"`) when several attempts per task exist.
 
 ## What this will not do
 

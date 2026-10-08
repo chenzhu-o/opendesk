@@ -14,6 +14,7 @@ Modules
 ``preference``   best-of-N rollouts and preference pairs
 ``assertions``   claims the agent makes about the state, verified and scored
 ``training``     dataset rows for a trainer (SFT / DPO / GRPO)
+``action_rewards`` verifiable per-step action scores (GUI clicks, *Tools.*)
 
 Nothing here calls a model.  Every signal is derived from observable state
 (files, shell output, the accessibility tree, screenshots).
@@ -23,5 +24,5 @@ from __future__ import annotations
 
 __all__ = [
     "rewards", "goal_state", "process", "trajectories", "preference",
-    "assertions", "training",
+    "assertions", "training", "action_rewards",
 ]
