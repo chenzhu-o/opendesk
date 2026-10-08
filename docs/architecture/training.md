@@ -373,6 +373,22 @@ rows did not move. Coordinate visibility in eval prompts was **48.3%** of gold
 targets — read `func_match` together with floor and per-verb recall. Full
 numbers: `kaggle/opendesk-sft/v11_metrics.json`.
 
+## Preference / RL (DPO kernel)
+
+The **`kaggle/opendesk-rl`** script closes the preference loop when only one
+successful rollout exists per task:
+
+1. Build rows with `build_dataset(..., format="dpo")` after attaching synthetic
+   **hard negatives** (gold vs modal `Agent.click` / wrong coordinates) on the
+   **same prompt**.
+2. One-epoch SFT warm-start (4608-token cap, T4-safe).
+3. **Ref-free DPO** on one model — no reference copy — using length-normalised
+   log-ratio on completion tokens.
+
+Production RL should replace synthetic negatives with `preference.best_of_n` +
+`export_pairs` once multiple rollouts per task exist; GRPO rows from
+`format="grpo"` need reward spread within a task group.
+
 ## What this will not do
 
 - **No gradients, no tokenizer, no framework import.** The output is JSONL. If
