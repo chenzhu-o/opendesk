@@ -401,6 +401,8 @@ def build_dataset(
     drop_degenerate: bool = True,
     resolver: Optional[Callable[[dict[str, Any]], Optional[str]]] = None,
     prompt_resolver: Optional[Callable[[dict[str, Any]], Optional[str]]] = None,
+    tree_resolver: Optional[Callable[[dict[str, Any]], Optional[str]]] = None,
+    canonical_actions: bool = False,
     sanitize: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
 ) -> Dataset:
     """Assemble training rows from trajectories (and pairs, for ``dpo``).
@@ -447,6 +449,15 @@ def build_dataset(
         the caller.  This is the prompt-side counterpart of *resolver*, and the
         two are needed together for per-step GUI data: one supplies the state,
         the other the response the policy actually produced in it.
+    tree_resolver:
+        Optional ``episode -> str | None`` returning the accessibility tree
+        used for :mod:`action_space` mapping.  Defaults to ``_tree`` /
+        ``observation_tree`` on the episode record.
+    canonical_actions:
+        When ``True``, map legacy ``Agent.click(coordinates=…)`` to semantic
+        ``click(name=…, role=…)`` when the tree uniquely supports it; otherwise
+        keep coordinates and set ``sample_weight`` below 1.  Rows gain
+        ``completion_legacy``, ``action_tier``, ``mapping_status``.
     sanitize:
         Optional ``episode -> episode`` applied before rendering, for scrubbing
         what should not be memorised.  The audit log holds absolute paths, so a
@@ -479,9 +490,35 @@ def build_dataset(
         "tasks": 0,
         "groups": 0,
         "successes": 0,
+        "canonical_actions": canonical_actions,
+        "action_mapping": {},
     }
     trust_tally: dict[str, int] = {}
     weak_floor = TRUST_ORDER[WEAK_BELOW]
+
+    def _tree_text(episode: dict[str, Any]) -> str:
+        if tree_resolver is not None:
+            t = tree_resolver(episode)
+            if t:
+                return t
+        from opendesk.learning.action_space import observation_tree_from_episode
+        return observation_tree_from_episode(episode)
+
+    def _action_space_fields(episode: dict[str, Any], text: str) -> tuple[str, dict[str, Any]]:
+        if not canonical_actions or not text:
+            return text, {}
+        from opendesk.learning.action_space import map_legacy_completion
+        mapped = map_legacy_completion(text, _tree_text(episode))
+        key = mapped.status
+        stats["action_mapping"][key] = stats["action_mapping"].get(key, 0) + 1
+        extra: dict[str, Any] = {
+            "sample_weight": mapped.sample_weight,
+            "action_tier": mapped.tier,
+            "mapping_status": mapped.status,
+        }
+        if mapped.changed:
+            extra["completion_legacy"] = mapped.legacy
+        return mapped.primary, extra
 
     def completion(episode: dict[str, Any]) -> tuple[str, str]:
         if resolver is not None:
@@ -515,7 +552,8 @@ def build_dataset(
                 stats["dropped_low_trust"] += 1
                 continue
             text, source = completion(episode)
-            rows.append({
+            text, space_extra = _action_space_fields(episode, text)
+            row = {
                 "prompt": prompt_of(episode),
                 "completion": text,
                 "task": episode.get("task"),
@@ -527,7 +565,9 @@ def build_dataset(
                 "trust": trust_of(episode),
                 "completion_source": source,
                 "schema": SCHEMA_VERSION,
-            })
+            }
+            row.update(space_extra)
+            rows.append(row)
 
     elif format == "dpo":
         if pairs is None:
@@ -553,6 +593,8 @@ def build_dataset(
                 continue
             chosen_text, chosen_src = completion(chosen)
             rejected_text, rejected_src = completion(rejected)
+            chosen_text, chosen_extra = _action_space_fields(chosen, chosen_text)
+            rejected_text, rejected_extra = _action_space_fields(rejected, rejected_text)
             if chosen_text == rejected_text:
                 # No gradient to give: DPO's loss is a function of the
                 # difference, and an identical pair makes that difference zero
@@ -561,7 +603,7 @@ def build_dataset(
                 stats["dropped_identical"] += 1
                 if drop_degenerate:
                     continue
-            rows.append({
+            dpo_row = {
                 "prompt": chosen_prompt,
                 "chosen": chosen_text,
                 "rejected": rejected_text,
@@ -580,7 +622,14 @@ def build_dataset(
                     chosen_src if chosen_src == rejected_src else RENDER_VERSION
                 ),
                 "schema": SCHEMA_VERSION,
-            })
+            }
+            if chosen_extra.get("sample_weight") is not None:
+                dpo_row["chosen_sample_weight"] = chosen_extra["sample_weight"]
+            if rejected_extra.get("sample_weight") is not None:
+                dpo_row["rejected_sample_weight"] = rejected_extra["sample_weight"]
+            dpo_row["chosen_mapping_status"] = chosen_extra.get("mapping_status")
+            dpo_row["rejected_mapping_status"] = rejected_extra.get("mapping_status")
+            rows.append(dpo_row)
 
     elif format == "grpo":
         groups: dict[str, list[dict[str, Any]]] = {}

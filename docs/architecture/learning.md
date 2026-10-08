@@ -157,6 +157,8 @@ mode — see [`reward`](../tools/reward.md#goal-states).
 | `opendesk.learning.preference` | Ranking, pairing, best-of-N driver |
 | `opendesk.learning.assertions` | Agent-declared claims, calibration, regressions |
 | `opendesk.learning.training` | Dataset rows for a trainer (SFT / DPO / GRPO) |
+| `opendesk.learning.action_space` | Legacy OSWorld → tier-1 UI / Tools mapping |
+| `opendesk.learning.harness_evolution` | Harness evidence reports (human merge) |
 | `opendesk.computer.diagnostics` | State-transition graph |
 | `opendesk.computer.observations` | Lossless visual memory |
 

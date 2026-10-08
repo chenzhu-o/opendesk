@@ -1004,3 +1004,33 @@ class TestToolSurface:
         assert "dataset_build" not in actions
         assert actions == ["ui_action"]
 
+
+class TestCanonicalActionSpace:
+    def test_build_dataset_maps_unique_click(self):
+        ep = {
+            "schema": "opendesk.trajectory/1",
+            "type": "episode",
+            "episode_id": "e1",
+            "task": "Save",
+            "outcome": {"reward": 1.0},
+            "process": {"metrics": {"signal_source": "ui"}},
+            "steps": [],
+            "_tree": "push-button\tOK\t(50, 60)\t(10, 10)",
+        }
+
+        def resolver(_ep):
+            return "Agent.click(coordinates=[50, 60])"
+
+        job = training.build_dataset(
+            [ep],
+            format="sft",
+            resolver=resolver,
+            canonical_actions=True,
+        )
+        assert len(job.rows) == 1
+        row = job.rows[0]
+        assert row["completion"].startswith("click(name=")
+        assert row["completion_legacy"] == "Agent.click(coordinates=[50, 60])"
+        assert row["sample_weight"] == 1.0
+        assert job.stats["action_mapping"]["mapped_ui"] == 1
+

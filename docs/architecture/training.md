@@ -373,6 +373,34 @@ rows did not move. Coordinate visibility in eval prompts was **48.3%** of gold
 targets — read `func_match` together with floor and per-verb recall. Full
 numbers: `kaggle/opendesk-sft/v11_metrics.json`.
 
+## Action space (dual track)
+
+Training rows can carry **two views** of the same step:
+
+| Field | Meaning |
+|---|---|
+| `completion` | Primary target — semantic `click(name=…, role=…)` or passthrough `*Tools.*` when mapping succeeds |
+| `completion_legacy` | Original OSWorld string when it differs (e.g. `Agent.click(coordinates=…)`) |
+| `sample_weight` | `1.0` for mapped UI / tools; **0.35** default for honest coordinate fallback |
+| `action_tier` | `ui`, `tool`, `pointer_fallback`, … |
+| `mapping_status` | `mapped_ui`, `retained_pointer`, `passthrough_tool`, … |
+
+Enable with ``build_dataset(..., canonical_actions=True)``. Mapping uses the
+accessibility tree (`_tree` on the episode, or ``tree_resolver``). **Ambiguous
+or invisible targets are not faked** — coordinates stay, with lower weight.
+
+## Harness evolution (review only)
+
+``opendesk.learning.harness_evolution`` aggregates mapping + process metrics
+from failed or weak episodes and writes **suggested** ``HarnessProfile`` patches
+(JSON + Markdown). It does **not** change runtime code or reward specs.
+
+```bash
+python examples/harness-review/run.py runs/trajectories.jsonl -o report.json
+```
+
+Merge profile changes through a normal PR (see ``examples/harness-profile.example.yaml``).
+
 ## Preference / RL (DPO kernel)
 
 The **`kaggle/opendesk-rl`** script closes the preference loop when only one

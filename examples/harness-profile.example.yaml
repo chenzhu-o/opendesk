@@ -1,0 +1,7 @@
+# Reviewable harness defaults — merge via PR, never auto-applied at runtime.
+max_tree_chars: 12800
+max_prompt_tokens: 4608
+escalate_tier_on_no_effect: true
+max_no_effect_before_som: 2
+pointer_fallback_loss_weight: 0.35
+prefer_ui_over_coordinates: true
