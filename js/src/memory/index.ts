@@ -23,9 +23,19 @@ export {
   daemonAlive,
   readDaemonState,
 } from "./config.js";
-export { MemoryStore, type Frame, type StoreStats, type QueryOpts, queryTerms, makeSnippet, frameWhen } from "./store.js";
+export {
+  MemoryStore, TEXT_SOURCES, type Frame, type StoreStats, type QueryOpts, type ReindexCounts, type StoreOptions,
+  type TextSource, queryTerms, makeSnippet, frameWhen,
+} from "./store.js";
 export { parseWhen, parseRange, fmtTs, fmtDay, fmtRange, type TimeRange } from "./timeparse.js";
-export { ScreenMemoryRecorder, startDaemon, type RecorderOptions, type CaptureFn, type OcrFn } from "./recorder.js";
+export {
+  ScreenMemoryRecorder, startDaemon, titleKey, type RecorderOptions, type CaptureFn, type OcrFn, type FrontmostFn, type WindowTextFn,
+} from "./recorder.js";
+export { redact, redactText, luhnOk } from "./redact.js";
+export {
+  MemoryCipher, loadOrCreateKey, readKeyInfo, resolveKeyProvider, setKeyProviderResolver,
+  KeychainProvider, SecretToolProvider, FileKeyProvider, StaticKeyProvider, type KeyProvider, type KeyInfo,
+} from "./crypto.js";
 export { makeThumbnail, frameSignature, signatureDelta, type Thumbnail } from "./image.js";
 export { createOcrEngine, availableBackend, ensureVisionHelper, type OcrEngine, type OcrPreference } from "./ocr.js";
 export { frontmost, type Frontmost } from "./frontmost.js";

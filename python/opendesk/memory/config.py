@@ -2,9 +2,13 @@
 
 Everything lives under ``<home>/memory/`` (``~/.opendesk/memory`` by default):
 
-* ``config.json``  — :class:`MemoryConfig` (interval, storage cap, deny list …)
+* ``config.json``  — :class:`MemoryConfig` (trigger, intervals, storage cap,
+  deny list, redaction, encryption …)
 * ``index.db``     — SQLite index with FTS5 full-text search (see ``store.py``)
-* ``thumbs/``      — JPEG thumbnails, one folder per day
+* ``thumbs/``      — JPEG thumbnails, one folder per day (``*.jpg.enc`` when
+  encrypted, see ``crypto.py``)
+* ``keyinfo.json`` — which key store holds the encryption key (no secrets)
+* ``key``          — the key itself, only when the file key store is used
 * ``paused.json``  — present while capture is paused (hotkey / tool / CLI)
 * ``daemon.json``  — heartbeat written by the capture loop so other
   processes (the MCP server, the CLI) can report whether it's alive.
@@ -38,6 +42,20 @@ DEFAULT_DENY_APPS: list[str] = [
     "Dashlane",
 ]
 
+# Private / incognito browser windows put this in their window title.
+PRIVATE_BROWSING_PATTERNS: list[str] = [
+    "Private Browsing",
+    "Incognito",
+    "InPrivate",
+]
+
+DEFAULT_DENY_APPS: list[str] = DEFAULT_DENY_APPS + PRIVATE_BROWSING_PATTERNS
+
+#: Bumped when a new default needs to be merged into existing config files.
+CONFIG_VERSION = 2
+
+TRIGGERS = ("events", "interval")
+
 
 def _default_hotkey() -> str:
     # pynput GlobalHotKeys syntax.  Cmd on macOS, Ctrl elsewhere.
@@ -63,7 +81,22 @@ class MemoryConfig:
     """User-tunable settings for the capture loop and index."""
 
     interval_seconds: float = 30.0
-    """Seconds between captures.  Low frequency by design."""
+    """Maximum seconds between captures.  In ``interval`` mode this is the
+    fixed period; in ``events`` mode it is the idle fallback — a capture is
+    attempted when this much time has passed without one (and is kept only
+    if the screen changed)."""
+
+    trigger: str = "events"
+    """``events`` (default): poll the frontmost app/window cheaply and
+    capture when it changes, plus the ``interval_seconds`` idle fallback.
+    ``interval``: capture on a fixed timer, like v1."""
+
+    poll_seconds: float = 1.0
+    """How often the ``events`` trigger probes the frontmost app/window."""
+
+    min_interval_seconds: float = 2.0
+    """Debounce: never capture more often than this, however fast windows
+    change."""
 
     storage_cap_mb: int = 2048
     """Hard ceiling for thumbnails + index.  Oldest frames are deleted first."""
@@ -89,7 +122,26 @@ class MemoryConfig:
     duplicate of the previous one and skipped."""
 
     ocr_backend: str = "auto"
-    """``auto`` (pytesseract → native), ``tesseract``, or ``native``."""
+    """``auto`` (pytesseract → native), ``tesseract``, ``native``, or
+    ``always`` — run OCR even when accessibility text was read (the OCR text
+    is appended to it)."""
+
+    ax_min_chars: int = 40
+    """Accessibility text shorter than this is ignored and OCR runs instead."""
+
+    redact: bool = True
+    """Replace credit-card numbers, API keys/tokens, JWTs, private keys and
+    ``password: …`` pairs with ``[REDACTED:<kind>]`` before storing text."""
+
+    encrypt_thumbnails: bool = True
+    """Store thumbnails AES-GCM encrypted (``*.jpg.enc``)."""
+
+    encrypt_text: bool = False
+    """Store frame text AES-GCM encrypted with a keyed blind index for
+    search.  Exact-term search only (no prefix ``foo*`` matches)."""
+
+    config_version: int = CONFIG_VERSION
+    """Schema version of this file; older files get new defaults merged in."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -97,7 +149,32 @@ class MemoryConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MemoryConfig":
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in data.items() if k in known})
+        cfg = cls(**{k: v for k, v in data.items() if k in known})
+        version = data.get("config_version")
+        if not isinstance(version, int) or version < 2:
+            # v1 files predate the private-browsing defaults: merge them in
+            # once; the saved file then carries config_version 2, so a user
+            # who removes them later is respected.
+            for pat in PRIVATE_BROWSING_PATTERNS:
+                cfg.deny_add(pat)
+        cfg.config_version = CONFIG_VERSION
+        cfg.normalize()
+        return cfg
+
+    def normalize(self) -> "MemoryConfig":
+        """Coerce hand-edited values into range."""
+        self.trigger = str(self.trigger or "events").strip().lower()
+        if self.trigger not in TRIGGERS:
+            self.trigger = "events"
+        self.interval_seconds = _num(self.interval_seconds, 30.0, lo=1.0)
+        self.poll_seconds = _num(self.poll_seconds, 1.0, lo=0.2)
+        self.min_interval_seconds = _num(self.min_interval_seconds, 2.0, lo=0.0)
+        self.ax_min_chars = int(_num(self.ax_min_chars, 40, lo=0))
+        for name in ("redact", "encrypt_thumbnails", "encrypt_text"):
+            setattr(self, name, _flag(getattr(self, name)))
+        if not isinstance(self.deny_apps, list):
+            self.deny_apps = list(DEFAULT_DENY_APPS)
+        return self
 
     # -- deny list helpers ------------------------------------------------
 
@@ -292,6 +369,22 @@ def _atomic_write(path: Path, text: str) -> None:
     except OSError:
         pass
     os.replace(tmp, path)
+
+
+def _num(value: Any, default: float, *, lo: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v != v:  # NaN
+        return default
+    return max(lo, v)
+
+
+def _flag(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 def _fmt_duration(seconds: int) -> str:

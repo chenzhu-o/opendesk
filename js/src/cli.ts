@@ -672,8 +672,60 @@ async function cmdMemory(argv: string[]): Promise<void> {
       if (flags["cap"] !== undefined) { cfg.storage_cap_mb = Math.floor(num(flags["cap"], cfg.storage_cap_mb)); changed = true; }
       if (flags["retention"] !== undefined) { cfg.retention_days = Math.floor(num(flags["retention"], cfg.retention_days)); changed = true; }
       if (flags["hotkey"] !== undefined) { cfg.pause_hotkey = flags["hotkey"] === true ? "" : str(flags["hotkey"]); changed = true; }
-      if (changed) console.log(`Saved ${saveConfig(cfg, home)}`);
+      const onOff = (name: string): boolean | undefined => {
+        if (flags[name] === undefined) return undefined;
+        const v = str(flags[name]).toLowerCase();
+        if (v !== "on" && v !== "off") fatal(`--${name} must be 'on' or 'off'`, 2);
+        return v === "on";
+      };
+      if (flags["trigger"] !== undefined) {
+        const t = str(flags["trigger"]).toLowerCase();
+        if (t !== "events" && t !== "interval") fatal("--trigger must be 'events' or 'interval'", 2);
+        cfg.trigger = t; changed = true;
+      }
+      if (flags["poll"] !== undefined) { cfg.poll_seconds = num(flags["poll"], cfg.poll_seconds); changed = true; }
+      if (flags["min-interval"] !== undefined) { cfg.min_interval_seconds = num(flags["min-interval"], cfg.min_interval_seconds); changed = true; }
+      const redactFlag = onOff("redact");
+      if (redactFlag !== undefined) { cfg.redact = redactFlag; changed = true; }
+      const beforeEnc = `${cfg.encrypt_text}/${cfg.encrypt_thumbnails}`;
+      const encText = onOff("encrypt-text");
+      if (encText !== undefined) { cfg.encrypt_text = encText; changed = true; }
+      const encThumbs = onOff("encrypt-thumbnails");
+      if (encThumbs !== undefined) { cfg.encrypt_thumbnails = encThumbs; changed = true; }
+      if (changed) {
+        cfg.normalize();
+        console.log(`Saved ${saveConfig(cfg, home)}`);
+        if (`${cfg.encrypt_text}/${cfg.encrypt_thumbnails}` !== beforeEnc) {
+          console.log("  New frames use the new setting; run `opendesk-js memory reindex` to convert existing ones.");
+        }
+      }
       for (const [k, v] of Object.entries(cfg.toDict())) console.log(`  ${k}: ${Array.isArray(v) ? JSON.stringify(v) : v}`);
+      return;
+    }
+    case "reindex": {
+      const { loadConfig } = await import("./memory/config.js");
+      const { MemoryStore } = await import("./memory/store.js");
+      const cfg = loadConfig(home);
+      const store = new MemoryStore(home, { config: cfg });
+      const n = store.stats().frames;
+      const what = [
+        `text → ${cfg.encrypt_text ? "encrypted" : "plaintext"}`,
+        `thumbnails → ${cfg.encrypt_thumbnails ? "encrypted" : "plaintext"}`,
+        ...(cfg.redact ? ["redact secrets in old text"] : []),
+      ].join("; ");
+      if (!bool(flags["yes"]) && !bool(flags["y"])) {
+        const readline = await import("readline");
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((resolve) => rl.question(`Rewrite ${n} frame(s) (${what})? [y/N] `, resolve));
+        rl.close();
+        if (!answer.trim().toLowerCase().startsWith("y")) { console.log("Cancelled."); return; }
+      }
+      const c = store.reindex({ redact: cfg.redact });
+      console.log(
+        `Reindexed ${c.frames} frame(s): text encrypted ${c.text_encrypted}, decrypted ${c.text_decrypted}; ` +
+        `thumbnails encrypted ${c.thumbs_encrypted}, decrypted ${c.thumbs_decrypted}; redacted ${c.redacted}; failed ${c.failed}.`,
+      );
+      if (c.failed) console.log("  Failed frames could not be decrypted (memory key missing or replaced) and were left as-is.");
       return;
     }
     case "clear": {
@@ -727,7 +779,7 @@ async function cmdMemory(argv: string[]): Promise<void> {
       return;
     }
     default:
-      fatal("usage: opendesk-js memory start|status|pause|resume|search|timeline|show|deny|config|clear|install-service|uninstall-service", 2);
+      fatal("usage: opendesk-js memory start|status|pause|resume|search|timeline|show|deny|config|reindex|clear|install-service|uninstall-service", 2);
   }
 }
 
@@ -751,7 +803,17 @@ async function memoryStatus(home: string | undefined): Promise<void> {
   const span = st.frames && st.oldest !== null && st.newest !== null ? `  (${fmtTs(st.oldest)} → ${fmtTs(st.newest)})` : "";
   console.log(`  frames:    ${st.frames}${span}`);
   console.log(`  size:      ${mb(st.totalBytes)} MB of ${cfg.storage_cap_mb} MB cap`);
-  console.log(`  retention: ${cfg.retention_days} days   interval: every ${cfg.interval_seconds}s`);
+  console.log(cfg.trigger === "interval"
+    ? `  trigger:   interval — every ${cfg.interval_seconds}s`
+    : `  trigger:   events — on app/window change (poll ${cfg.poll_seconds}s, ≥${cfg.min_interval_seconds}s apart), idle fallback ${cfg.interval_seconds}s`);
+  console.log(`  retention: ${cfg.retention_days} days`);
+  const srcs = Object.entries(st.textSources).sort().map(([k, v]) => `${k} ×${v}`).join(", ");
+  if (srcs) console.log(`  text:      ${srcs}   redaction ${cfg.redact ? "on" : "off"}`);
+  console.log(
+    `  encrypt:   thumbnails ${cfg.encrypt_thumbnails ? "on" : "off"} (${st.encryptedThumbnails}/${st.thumbnails} stored encrypted); ` +
+    `text ${cfg.encrypt_text ? "on" : "off"} (${st.encryptedTextFrames}/${st.frames}); key: ${st.keyStore ?? "not created yet"}`,
+  );
+  if (state?.["redactions"]) console.log(`  redacted:  ${state["redactions"]} secret(s) this daemon run`);
   console.log(`  deny list: ${cfg.deny_apps.join(", ") || "(empty)"}`);
   console.log(`  hotkey:    ${cfg.pause_hotkey || "(disabled)"}`);
   if (st.apps.length) console.log("  top apps:  " + st.apps.slice(0, 6).map(([a, n]) => `${a || "(unknown)"} ×${n}`).join(", "));
@@ -768,9 +830,24 @@ async function memoryQuery(home: string | undefined, sub: string, pos: string[],
     const frame = store.get(id);
     if (!frame) fatal(`No frame with id ${id}.`);
     console.log(`#${frame.id}  ${frameWhen(frame)}  [${frame.app || "(unknown)"}]  ${frame.title}`);
-    if (frame.thumb_path) console.log(`thumbnail: ${path.join(store.dir, frame.thumb_path)}`);
+    console.log(`text:      ${frame.text_source || "?"}${frame.encrypted ? " (encrypted at rest)" : ""}`);
+    if (frame.thumb_path) {
+      const save = str(flags["save"]);
+      if (save) {
+        const data = store.thumbnail(frame);
+        if (!data) process.stderr.write("thumbnail: could not be read (missing, or the memory key is unavailable)\n");
+        else {
+          fs.writeFileSync(save, data);
+          console.log(`thumbnail: saved ${data.length} bytes to ${save}`);
+        }
+      } else if (frame.thumb_path.endsWith(".enc")) {
+        console.log(`thumbnail: ${path.join(store.dir, frame.thumb_path)} (encrypted — use --save out.jpg)`);
+      } else {
+        console.log(`thumbnail: ${path.join(store.dir, frame.thumb_path)}`);
+      }
+    }
     console.log();
-    console.log(frame.text || "(no text)");
+    console.log(frame.encrypted && !frame.text ? "(encrypted text — memory key unavailable)" : frame.text || "(no text)");
     return;
   }
 
@@ -846,9 +923,12 @@ Screen memory (local, searchable history of what was on screen):
   memory resume           Resume capture
   memory search <query>   Full-text search (--since, --until, --app, --limit)
   memory timeline         List captured moments (--since, --until, --app)
-  memory show <id>        One moment's full text + thumbnail path
+  memory show <id>        One moment's full text + thumbnail (--save out.jpg decrypts it)
   memory deny [add|remove <pattern>]   Per-app / window-title deny list
-  memory config           --interval N --cap MB --retention DAYS --hotkey '<ctrl>+<alt>+m'
+  memory config           --trigger events|interval --interval N --poll S --min-interval S
+                          --redact on|off --encrypt-text on|off --encrypt-thumbnails on|off
+                          --cap MB --retention DAYS --hotkey '<ctrl>+<alt>+m'
+  memory reindex          Rewrite stored frames under the current encryption/redaction settings (--yes)
   memory clear            Delete frames (--before <when>, --app <name>, --yes)
   memory install-service | uninstall-service   Run the daemon at login
 

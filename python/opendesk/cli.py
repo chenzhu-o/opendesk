@@ -877,7 +877,7 @@ def cmd_scheduler(args) -> None:
 
 
 def cmd_memory(args) -> None:
-    """``opendesk memory <start|status|pause|resume|search|timeline|show|deny|config|clear|install-service|uninstall-service>``."""
+    """``opendesk memory <start|status|pause|resume|search|timeline|show|deny|config|reindex|clear|install-service|uninstall-service>``."""
     home = Path(args.home).expanduser() if getattr(args, "home", None) else None
     sub = args.memory_cmd or "status"
 
@@ -944,11 +944,60 @@ def cmd_memory(args) -> None:
             cfg.retention_days = int(args.retention); changed = True
         if args.hotkey is not None:
             cfg.pause_hotkey = args.hotkey; changed = True
+        if args.trigger is not None:
+            cfg.trigger = args.trigger; changed = True
+        if args.poll is not None:
+            cfg.poll_seconds = float(args.poll); changed = True
+        if args.min_interval is not None:
+            cfg.min_interval_seconds = float(args.min_interval); changed = True
+        if args.redact is not None:
+            cfg.redact = args.redact == "on"; changed = True
+        before_enc = (cfg.encrypt_text, cfg.encrypt_thumbnails)
+        if args.encrypt_text is not None:
+            cfg.encrypt_text = args.encrypt_text == "on"; changed = True
+        if args.encrypt_thumbnails is not None:
+            cfg.encrypt_thumbnails = args.encrypt_thumbnails == "on"; changed = True
         if changed:
+            cfg.normalize()
             path = save_config(cfg, home)
             print(f"Saved {path}")
+            if (cfg.encrypt_text, cfg.encrypt_thumbnails) != before_enc:
+                print("  New frames use the new setting; run `opendesk memory reindex` to convert existing ones.")
         for k, v in cfg.to_dict().items():
             print(f"  {k}: {v}")
+        return
+
+    if sub == "reindex":
+        from opendesk.memory.config import load_config
+        from opendesk.memory.store import MemoryStore
+        cfg = load_config(home)
+        with MemoryStore(home, config=cfg) as store:
+            n = store.stats().frames
+            what = [
+                f"text → {'encrypted' if cfg.encrypt_text else 'plaintext'}",
+                f"thumbnails → {'encrypted' if cfg.encrypt_thumbnails else 'plaintext'}",
+            ]
+            if cfg.redact:
+                what.append("redact secrets in old text")
+            if not args.yes:
+                answer = input(f"Rewrite {n} frame(s) ({'; '.join(what)})? [y/N] ")
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Cancelled.")
+                    return
+
+            def _progress(done: int, total: int) -> None:
+                print(f"\r  {done}/{total}", end="", flush=True)
+
+            counts = store.reindex(redact=cfg.redact, progress=_progress if n > 200 else None)
+        if n > 200:
+            print()
+        print(
+            "Reindexed {frames} frame(s): text encrypted {text_encrypted}, decrypted {text_decrypted}; "
+            "thumbnails encrypted {thumbs_encrypted}, decrypted {thumbs_decrypted}; "
+            "redacted {redacted}; failed {failed}.".format(**counts)
+        )
+        if counts["failed"]:
+            print("  Failed frames could not be decrypted (memory key missing or replaced) and were left as-is.")
         return
 
     if sub == "clear":
@@ -1001,7 +1050,7 @@ def cmd_memory(args) -> None:
         print("✓ Screen-memory service removed." if removed else "No screen-memory service was installed.")
         return
 
-    print("Usage: opendesk memory start|status|pause|resume|search|timeline|show|deny|config|clear")
+    print("Usage: opendesk memory start|status|pause|resume|search|timeline|show|deny|config|reindex|clear")
 
 
 def _memory_status(home) -> None:
@@ -1028,7 +1077,26 @@ def _memory_status(home) -> None:
     span = f"  ({fmt_ts(st.oldest)} → {fmt_ts(st.newest)})" if st.frames and st.oldest and st.newest else ""
     print(f"  frames:    {st.frames}{span}")
     print(f"  size:      {mb(st.total_bytes)} MB of {cfg.storage_cap_mb} MB cap")
-    print(f"  retention: {cfg.retention_days} days   interval: every {cfg.interval_seconds:g}s")
+    if cfg.trigger == "interval":
+        trig = f"interval — every {cfg.interval_seconds:g}s"
+    else:
+        trig = (f"events — on app/window change (poll {cfg.poll_seconds:g}s, "
+                f"≥{cfg.min_interval_seconds:g}s apart), idle fallback {cfg.interval_seconds:g}s")
+    print(f"  trigger:   {trig}")
+    print(f"  retention: {cfg.retention_days} days")
+    if st.text_sources:
+        print("  text:      " + ", ".join(f"{k} ×{v}" for k, v in sorted(st.text_sources.items()))
+              + f"   redaction {'on' if cfg.redact else 'off'}")
+    enc_bits = [
+        f"thumbnails {'on' if cfg.encrypt_thumbnails else 'off'} ({st.encrypted_thumbnails}/{st.thumbnails} stored encrypted)",
+        f"text {'on' if cfg.encrypt_text else 'off'} ({st.encrypted_text_frames}/{st.frames})",
+    ]
+    key = st.key_store or "not created yet"
+    print(f"  encrypt:   {'; '.join(enc_bits)}; key: {key}")
+    if not st.encryption_available:
+        print("             WARNING: 'cryptography' not installed — new frames are stored unencrypted")
+    if state.get("redactions"):
+        print(f"  redacted:  {state.get('redactions')} secret(s) this daemon run")
     print(f"  deny list: {', '.join(cfg.deny_apps) or '(empty)'}")
     print(f"  hotkey:    {cfg.pause_hotkey or '(disabled)'}")
     print(f"  search:    {'FTS5' if fts else 'LIKE fallback'}")
@@ -1053,10 +1121,28 @@ def _memory_query(home, sub: str, args) -> None:
                 print(f"No frame with id {args.id}.", file=sys.stderr)
                 sys.exit(1)
             print(f"#{frame.id}  {frame.when}  [{frame.app or '(unknown)'}]  {frame.title}")
+            src = frame.text_source or "?"
+            print(f"text:      {src}{' (encrypted at rest)' if frame.encrypted else ''}")
             if frame.thumb_path:
-                print(f"thumbnail: {store.dir / frame.thumb_path}")
+                encrypted = frame.thumb_path.endswith(".enc")
+                save = getattr(args, "save", None)
+                if save:
+                    data = store.thumbnail(frame)
+                    if data is None:
+                        print("thumbnail: could not be read (missing, or the memory key is unavailable)",
+                              file=sys.stderr)
+                    else:
+                        Path(save).expanduser().write_bytes(data)
+                        print(f"thumbnail: saved {len(data)} bytes to {save}")
+                elif encrypted:
+                    print(f"thumbnail: {store.dir / frame.thumb_path} (encrypted — use --save out.jpg)")
+                else:
+                    print(f"thumbnail: {store.dir / frame.thumb_path}")
             print()
-            print(frame.text or "(no text)")
+            if frame.encrypted and not frame.text:
+                print("(encrypted text — memory key unavailable)")
+            else:
+                print(frame.text or "(no text)")
             return
         if sub == "search":
             frames = store.search(args.query, start=start, end=end, app=args.app, limit=args.limit)
@@ -1420,7 +1506,7 @@ def main() -> None:
         "memory",
         help=(
             "Screen memory: a local, searchable history of what was on screen. "
-            "Background capture every ~30s, OCR'd and indexed on this machine only."
+            "Captures on app/window change, reads accessibility text or OCR, redacts and encrypts, indexed on this machine only."
         ),
     )
     mem_p.add_argument("--home", default=None, help="opendesk home (default ~/.opendesk)")
@@ -1458,6 +1544,8 @@ def main() -> None:
 
     msh = mem_sub.add_parser("show", help="Print one moment's full text and thumbnail path")
     msh.add_argument("id", type=int)
+    msh.add_argument("--save", default=None, metavar="FILE",
+                     help="Write the (decrypted) JPEG thumbnail to FILE")
     msh.add_argument("--home", default=None)
 
     md = mem_sub.add_parser("deny", help="Manage the per-app deny list")
@@ -1471,12 +1559,34 @@ def main() -> None:
     mdr.add_argument("pattern")
     mdr.add_argument("--home", default=None)
 
-    mc = mem_sub.add_parser("config", help="Show / change interval, storage cap, retention, hotkey")
-    mc.add_argument("--interval", type=float, default=None, help="Seconds between captures")
+    mc = mem_sub.add_parser(
+        "config",
+        help="Show / change trigger, intervals, storage cap, retention, hotkey, redaction, encryption",
+    )
+    mc.add_argument("--trigger", choices=["events", "interval"], default=None,
+                    help="events = capture on app/window change (default); interval = fixed timer")
+    mc.add_argument("--interval", type=float, default=None,
+                    help="Seconds between captures (interval mode) / idle fallback (events mode)")
+    mc.add_argument("--poll", type=float, default=None, help="Events mode: seconds between frontmost-window probes")
+    mc.add_argument("--min-interval", type=float, default=None, dest="min_interval",
+                    help="Events mode: minimum seconds between captures")
     mc.add_argument("--cap", type=int, default=None, help="Storage cap in MB (oldest frames deleted first)")
     mc.add_argument("--retention", type=int, default=None, help="Days to keep frames")
     mc.add_argument("--hotkey", default=None, help="Pause hotkey, pynput syntax, e.g. '<cmd>+<shift>+<alt>+p'; '' disables")
+    mc.add_argument("--redact", choices=["on", "off"], default=None,
+                    help="Scrub card numbers, API keys, tokens, passwords before storing text")
+    mc.add_argument("--encrypt-text", choices=["on", "off"], default=None, dest="encrypt_text",
+                    help="Encrypt stored text (exact-word search only); run `reindex` to convert old frames")
+    mc.add_argument("--encrypt-thumbnails", choices=["on", "off"], default=None, dest="encrypt_thumbnails",
+                    help="Encrypt stored thumbnails (default on)")
     mc.add_argument("--home", default=None)
+
+    mri = mem_sub.add_parser(
+        "reindex",
+        help="Rewrite existing frames under the current settings (encrypt/decrypt text & thumbnails, redact)",
+    )
+    mri.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+    mri.add_argument("--home", default=None)
 
     mcl = mem_sub.add_parser("clear", help="Delete stored frames (all, or --before / --app)")
     mcl.add_argument("--before", default=None, help="Only frames before this time phrase, e.g. '7d', '2026-08-01'")

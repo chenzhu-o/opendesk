@@ -6,6 +6,7 @@
  *   config.json  — MemoryConfig (snake_case keys, as in Python)
  *   paused.json  — present while capture is paused
  *   daemon.json  — heartbeat written by the capture loop
+ *   keyinfo.json — which key store holds the encryption key (crypto.ts)
  *
  * The daemon and the agent's MCP server are separate processes, so all
  * shared state goes through these files.  Nothing here touches the network.
@@ -18,6 +19,9 @@ import path from "node:path";
 export const DEFAULT_HOME = path.join(os.homedir(), ".opendesk");
 export const MEMORY_DIR_NAME = "memory";
 
+/** Private / incognito browser windows put this in their window title. */
+export const PRIVATE_BROWSING_PATTERNS = ["Private Browsing", "Incognito", "InPrivate"];
+
 export const DEFAULT_DENY_APPS = [
   "1Password",
   "Bitwarden",
@@ -25,6 +29,7 @@ export const DEFAULT_DENY_APPS = [
   "Keychain Access",
   "LastPass",
   "Dashlane",
+  ...PRIVATE_BROWSING_PATTERNS,
 ];
 
 export function defaultHotkey(): string {
@@ -49,8 +54,20 @@ export function memoryDir(home?: string): string {
 // Config
 // ---------------------------------------------------------------------------
 
+/** Bumped when a new default must be merged into existing config files. */
+export const CONFIG_VERSION = 2;
+
+export type Trigger = "events" | "interval";
+
 export interface MemoryConfigData {
+  /** Max seconds between captures: the fixed period (interval) or idle fallback (events). */
   interval_seconds: number;
+  /** "events" (capture on app/window change) or "interval" (fixed timer). */
+  trigger: string;
+  /** Events mode: seconds between frontmost-window probes. */
+  poll_seconds: number;
+  /** Events mode: never capture more often than this. */
+  min_interval_seconds: number;
   storage_cap_mb: number;
   retention_days: number;
   deny_apps: string[];
@@ -58,11 +75,24 @@ export interface MemoryConfigData {
   thumbnail_width: number;
   thumbnail_quality: number;
   dedupe_threshold: number;
+  /** auto | native | vision | winrt | tesseract | always (OCR even when AX text was read). */
   ocr_backend: string;
+  /** Accessibility text shorter than this is ignored and OCR runs instead. */
+  ax_min_chars: number;
+  /** Scrub card numbers, keys, tokens, passwords before storing text. */
+  redact: boolean;
+  /** Store thumbnails AES-GCM encrypted (*.jpg.enc). */
+  encrypt_thumbnails: boolean;
+  /** Store text encrypted with a blind index (exact-word search only). */
+  encrypt_text: boolean;
+  config_version: number;
 }
 
 export class MemoryConfig implements MemoryConfigData {
   interval_seconds = 30;
+  trigger = "events";
+  poll_seconds = 1.0;
+  min_interval_seconds = 2.0;
   storage_cap_mb = 2048;
   retention_days = 30;
   deny_apps: string[] = [...DEFAULT_DENY_APPS];
@@ -71,18 +101,48 @@ export class MemoryConfig implements MemoryConfigData {
   thumbnail_quality = 60;
   dedupe_threshold = 0.02;
   ocr_backend = "auto";
+  ax_min_chars = 40;
+  redact = true;
+  encrypt_thumbnails = true;
+  encrypt_text = false;
+  config_version = CONFIG_VERSION;
 
   constructor(init: Partial<MemoryConfigData> = {}) {
     Object.assign(this, filterKnown(init));
   }
 
   static fromDict(data: Record<string, unknown>): MemoryConfig {
-    return new MemoryConfig(filterKnown(data));
+    const cfg = new MemoryConfig(filterKnown(data));
+    const version = data["config_version"];
+    if (typeof version !== "number" || version < 2) {
+      // v1 files predate the private-browsing defaults: merge them in once.
+      for (const p of PRIVATE_BROWSING_PATTERNS) cfg.denyAdd(p);
+    }
+    cfg.config_version = CONFIG_VERSION;
+    return cfg.normalize();
+  }
+
+  /** Coerce hand-edited values into range. */
+  normalize(): this {
+    this.trigger = String(this.trigger ?? "events").trim().toLowerCase();
+    if (this.trigger !== "events" && this.trigger !== "interval") this.trigger = "events";
+    this.interval_seconds = clampNum(this.interval_seconds, 30, 1);
+    this.poll_seconds = clampNum(this.poll_seconds, 1, 0.2);
+    this.min_interval_seconds = clampNum(this.min_interval_seconds, 2, 0);
+    this.ax_min_chars = Math.floor(clampNum(this.ax_min_chars, 40, 0));
+    this.redact = flag(this.redact);
+    this.encrypt_thumbnails = flag(this.encrypt_thumbnails);
+    this.encrypt_text = flag(this.encrypt_text);
+    if (!Array.isArray(this.deny_apps)) this.deny_apps = [...DEFAULT_DENY_APPS];
+    return this;
   }
 
   toDict(): MemoryConfigData {
     return {
       interval_seconds: this.interval_seconds,
+      trigger: this.trigger,
+      poll_seconds: this.poll_seconds,
+      min_interval_seconds: this.min_interval_seconds,
       storage_cap_mb: this.storage_cap_mb,
       retention_days: this.retention_days,
       deny_apps: [...this.deny_apps],
@@ -91,6 +151,11 @@ export class MemoryConfig implements MemoryConfigData {
       thumbnail_quality: this.thumbnail_quality,
       dedupe_threshold: this.dedupe_threshold,
       ocr_backend: this.ocr_backend,
+      ax_min_chars: this.ax_min_chars,
+      redact: this.redact,
+      encrypt_thumbnails: this.encrypt_thumbnails,
+      encrypt_text: this.encrypt_text,
+      config_version: this.config_version,
     };
   }
 
@@ -118,9 +183,22 @@ export class MemoryConfig implements MemoryConfigData {
 }
 
 const KNOWN_KEYS: (keyof MemoryConfigData)[] = [
-  "interval_seconds", "storage_cap_mb", "retention_days", "deny_apps", "pause_hotkey",
+  "interval_seconds", "trigger", "poll_seconds", "min_interval_seconds",
+  "storage_cap_mb", "retention_days", "deny_apps", "pause_hotkey",
   "thumbnail_width", "thumbnail_quality", "dedupe_threshold", "ocr_backend",
+  "ax_min_chars", "redact", "encrypt_thumbnails", "encrypt_text", "config_version",
 ];
+
+function clampNum(value: unknown, dflt: number, lo: number): number {
+  const v = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(v)) return dflt;
+  return Math.max(lo, v);
+}
+
+function flag(value: unknown): boolean {
+  if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
 
 function filterKnown(data: Record<string, unknown>): Partial<MemoryConfigData> {
   const out: Record<string, unknown> = {};
