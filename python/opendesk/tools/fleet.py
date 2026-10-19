@@ -36,7 +36,7 @@ class FleetTool(Tool):
     """Fan one tool call out to many peers and collect the results."""
 
     name = "fleet"
-    title = "Run on many machines"
+    title = "Run on Many Machines"
     annotations = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}
     description = (
         "Run ONE tool call on several paired peers in parallel and get one result "

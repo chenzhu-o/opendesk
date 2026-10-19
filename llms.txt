@@ -36,6 +36,10 @@ Install: `claude mcp add opendesk -- uvx --from opendesk opendesk-mcp` (Claude C
 - [audit](https://vitalops.ai/opendesk/docs/tools/audit.html): session audit log and replay
 - [learn](https://vitalops.ai/opendesk/docs/tools/learn.html): record and replay workflows
 - [memory](https://vitalops.ai/opendesk/docs/tools/memory.html): local searchable screen history (`memory`, `memory_manage`)
+- [script](https://vitalops.ai/opendesk/docs/tools/script.html): shell, AppleScript/JXA, PowerShell — use instead of the GUI when possible
+- [browser](https://vitalops.ai/opendesk/docs/tools/browser.html): Chrome/Edge/Brave over the DevTools protocol
+- [fleet](https://vitalops.ai/opendesk/docs/tools/fleet.html): one tool call across several paired machines
+- [Safety](https://vitalops.ai/opendesk/docs/safety.html): risk tiers, approvals, kill switch, injection guard, audit chain, secrets
 
 ## Remote
 
@@ -49,6 +53,9 @@ Install: `claude mcp add opendesk -- uvx --from opendesk opendesk-mcp` (Claude C
 
 - [Integrations](https://vitalops.ai/opendesk/docs/integrations/index.html): Anthropic SDK, OpenAI, LangChain, custom
 - [Automation](https://vitalops.ai/opendesk/docs/automation/index.html): learn, replay and scheduler
+- [Compiled replay](https://vitalops.ai/opendesk/docs/automation/compiled-replay.html): deterministic replay with self-heal
+- [Evaluation](https://vitalops.ai/opendesk/docs/eval.html): eval suites, A/B against the native computer tool, OSWorld adapter
+- [Native helper](https://vitalops.ai/opendesk/docs/architecture/native-helper.html): fast macOS accessibility and background input
 - [Architecture](https://vitalops.ai/opendesk/docs/architecture/index.html): layers, protocol, data flow
 - [Protocol](https://vitalops.ai/opendesk/docs/protocol/index.html): wire format, encryption, pairing
 - [README](https://github.com/vitalops/opendesk/blob/main/README.md): project overview

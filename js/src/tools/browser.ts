@@ -272,7 +272,7 @@ export interface BrowserToolOptions {
 
 export class BrowserTool extends Tool {
   name = "browser";
-  title = "Web browser (DevTools)";
+  title = "Web Browser (DevTools)";
   annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
   description =
     "Drive a Chromium-family browser (Chrome, Chromium, Edge, Brave) through the Chrome DevTools " +

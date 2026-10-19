@@ -138,7 +138,7 @@ export interface ScriptToolOptions {
 
 export class ScriptTool extends Tool {
   name = "script";
-  title = "Run script";
+  title = "Run Scripts";
   annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
   description =
     "Run code on the target machine and return exit code, stdout and stderr.\n\n" +

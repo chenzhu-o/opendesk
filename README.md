@@ -182,17 +182,20 @@ Full details → [docs/architecture](docs/architecture/index.md)
 | Tool | What it does |
 |------|-------------|
 | `screenshot` | Capture the screen with numbered boxes on every clickable element (Set-of-Marks) |
-| `ui` | Click and type by element name — no coordinates needed |
+| `ui` | Click and type by element name or `[ref]` — no coordinates, no cursor movement |
 | `mouse` | Pixel-level mouse control for anything `ui` can't reach |
 | `keyboard` | Type text, press keys, send hotkeys |
 | `app` | Open, close, and focus applications |
 | `clipboard` | Read and write the system clipboard |
 | `ocr` | Extract text from any region of the screen |
+| `script` | Shell, AppleScript/JXA or PowerShell — skip the GUI when a task doesn't need it |
+| `browser` | Drive Chrome/Edge/Brave over the DevTools protocol: read pages, click, type, eval |
 | `learn` | Record a workflow once, replay it anytime |
 | `schedule` | Run any task or learned procedure on a timer |
 | `audit` | Show the session audit log, replay a session |
 | `memory` | Screen memory (read-only): recall anything that was on screen, fully local (`opendesk memory start`) |
 | `memory_manage` | Pause capture, edit the deny list, change retention, delete history |
+| `fleet` | Run one tool call on several paired machines in parallel |
 | `opendesk_*` | Pick and inspect paired remote machines (`opendesk_peers`, `opendesk_use`, …) |
 
 Every tool carries an MCP `title` and `readOnlyHint` / `destructiveHint` annotations, so clients can auto-approve read-only calls and ask before actions.
@@ -217,6 +220,8 @@ Perform the workflow yourself. The agent captures every click, keystroke, and sc
 "Replay expense-form"
 ```
 The agent re-executes using the current screen state — no hardcoded coordinates.
+
+**Compiled replay.** Each recording (or a successful session, via `learn(action="save_session")`) also compiles into a program that targets UI elements by app, role and title, with a check after each step. `learn(action="run")` replays it with **no LLM calls**; if a step fails, it stops and hands the agent the remaining steps to finish and `patch`. Scheduled replays use the compiled program first, so they run without an API key. → [docs/automation/compiled-replay.md](docs/automation/compiled-replay.md)
 
 **Schedule**
 ```
@@ -261,6 +266,40 @@ Every ~30 s the daemon captures the screen, OCRs it **on your machine**, and sto
 - **Storage cap with rolling deletion** — default 2 GB / 30 days; oldest frames go first.
 
 Full reference → [docs/tools/memory.md](docs/tools/memory.md)
+
+---
+
+## Safety
+
+Every tool call from an agent passes through a local safety guard before it touches the desktop.
+
+- **Risk tiers** — each tool and action is classified; the `standard` preset allows reads and ordinary input, and asks before high-risk actions such as `script` shell commands or `browser` eval. `strict` asks before anything that acts. Add your own allow / confirm / block rules per tool, app or peer.
+- **Approvals** — asked in the MCP client when it supports elicitation, otherwise in a native OS dialog.
+- **Kill switch and take-over** — `opendesk stop` refuses every agent call immediately, on this machine and from paired controllers; `opendesk takeover` / `handback` lets you drive for a while.
+- **Untrusted screen content** — text read off the screen is wrapped as data, scanned for prompt injection, and a hit makes input actions require approval for a while.
+- **Tamper-evident audit** — every call is written to a hash-chained log; `opendesk audit verify` checks it.
+- **Secrets the model never sees** — store a password with `opendesk secrets set NAME`; the agent types `{{secret:NAME}}` and OpenDesk fills it in from the OS keychain after you approve, redacting it everywhere.
+
+```bash
+opendesk policy preset strict    # ask before anything that acts
+opendesk stop                    # halt the agent now
+opendesk audit verify            # check the audit chain
+```
+
+Full guide → [docs/safety.md](docs/safety.md)
+
+---
+
+## Evaluation
+
+`opendesk eval` runs task suites against a real desktop and reports success, turns, time and cost: a macOS smoke suite, a prompt-injection suite, and regression checks for compiled workflows. Backends hold the model constant so you can compare OpenDesk's tools with the API's native computer tool. An OSWorld adapter is included.
+
+```bash
+opendesk eval run macos-smoke --dry-run   # show exactly what would run
+opendesk eval run injection --repeat 3    # uses Claude Code on your subscription
+```
+
+Full guide → [docs/eval.md](docs/eval.md)
 
 ---
 

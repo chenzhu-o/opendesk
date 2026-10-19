@@ -122,7 +122,7 @@ class ScriptTool(Tool):
     """Run a shell command, AppleScript, JXA, or PowerShell script."""
 
     name = "script"
-    title = "Run script"
+    title = "Run Scripts"
     annotations = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}
     description = (
         "Run code on the target machine and return exit code, stdout and stderr.\n\n"

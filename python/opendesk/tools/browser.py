@@ -194,7 +194,7 @@ class BrowserTool(Tool):
     """Control Chrome / Chromium / Edge / Brave through the DevTools Protocol."""
 
     name = "browser"
-    title = "Web browser (DevTools)"
+    title = "Web Browser (DevTools)"
     annotations = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}
     description = (
         "Drive a Chromium-family browser (Chrome, Chromium, Edge, Brave) through the "
