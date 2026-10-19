@@ -1401,6 +1401,9 @@ def main() -> None:
     mus = mem_sub.add_parser("uninstall-service", help="Remove the login service")
     mus.add_argument("--home", default=None)
 
+    from opendesk.eval.cli import add_eval_parser, cmd_eval
+    add_eval_parser(sub)
+
     args = parser.parse_args()
 
     if args.command == "install":
@@ -1411,6 +1414,8 @@ def main() -> None:
         cmd_scheduler(args)
     elif args.command == "memory":
         cmd_memory(args)
+    elif args.command == "eval":
+        cmd_eval(args)
     elif args.command == "pair":
         cmd_pair(args)
     elif args.command == "pair-with":
