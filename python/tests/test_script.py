@@ -254,14 +254,15 @@ class TestScriptRemote:
             await remote.aclose()
             await server_peer.aclose()
 
-    async def test_mcp_peer_routing(self, tmp_path: Path):
+    async def test_mcp_peer_routing(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("OPENDESK_APPROVAL_CHAIN", "mcp")
         assert "script" in PEER_AWARE_TOOLS
         local = OSFakeComputer("Darwin")
         remote = OSFakeComputer("Linux", stdout=b"from-mini")
         TrustedPeers(tmp_path).add(Identity.generate().public_bytes, name="mini")
         session = MCPSession(home=tmp_path, local=local)
         session._connections["mini"] = remote  # type: ignore[attr-defined]
-        dispatcher = MCPDispatcher(create_registry(), session)
+        dispatcher = MCPDispatcher(create_registry(), session, approver=_approve_all)
 
         entries = {e.name: e for e in await dispatcher.list_tools()}
         assert "peer" in entries["script"].schema["properties"]
@@ -273,3 +274,8 @@ class TestScriptRemote:
         assert "[on mini]" in text and "from-mini" in text
         assert any(c[0] == "exec" for c in remote.calls)
         assert not any(c[0] == "exec" for c in local.calls)
+
+
+async def _approve_all(_request):
+    """Stand-in for the user approving the high-risk shell call in the safety guard."""
+    return True

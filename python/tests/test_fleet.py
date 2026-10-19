@@ -230,7 +230,8 @@ class TestFleetExecution:
         assert "1 ok, 1 error" in r.output
         assert "timed out" in r.output
 
-    async def test_over_the_wire_peer(self, tmp_path: Path):
+    async def test_over_the_wire_peer(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("OPENDESK_APPROVAL_CHAIN", "mcp")
         """One peer is a real RemoteComputer over a loopback protocol link."""
         fake = FakeComputer()
         a, b = LoopbackConnection.pair()
@@ -246,7 +247,7 @@ class TestFleetExecution:
         try:
             local_peer = FakeComputer()
             session = _session(tmp_path, {"wire": remote, "inproc": local_peer})  # type: ignore[dict-item]
-            dispatcher = MCPDispatcher(create_registry(), session)
+            dispatcher = MCPDispatcher(create_registry(), session, approver=_approve_all)
             out = await dispatcher.call_tool("fleet", {
                 "peers": "all", "tool": "script",
                 "params": {"action": "shell", "code": "hostname"},
@@ -284,3 +285,8 @@ def test_cli_fleet_run_local(tmp_path: Path, monkeypatch, capsys):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "1 ok" in out and "fleet-cli-ok" in out
+
+
+async def _approve_all(_request):
+    """Stand-in for the user approving the high-risk shell call in the safety guard."""
+    return True
