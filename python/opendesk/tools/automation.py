@@ -16,6 +16,11 @@ _active_recorder: Any = None
 
 class LearnTool(Tool):
     name = "learn"
+    title = "Record & Replay Workflows"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Record and replay computer tasks. "
         "Actions:\n"
@@ -386,6 +391,11 @@ class LearnTool(Tool):
 
 class ScheduleTool(Tool):
     name = "schedule"
+    title = "Schedule Desktop Tasks"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Schedule tasks to run automatically on a timer.\n\n"
         "Actions:\n"

@@ -1,69 +1,32 @@
 /**
- * MemoryTool — recall what was on screen at any point in the past.
+ * Screen-memory tools — recall what was on screen at any point in the past.
  *
  * Backed by the local screen-memory index in `~/.opendesk/memory` (see
  * src/memory/).  The index is populated by the background daemon
- * (`opendesk-js memory start`); this tool reads it plus a few control
- * actions (pause / resume / deny list / delete).  Always local — screen
- * memory never leaves the machine it was recorded on.
+ * (`opendesk-js memory start`).  Two tools share this module:
+ *
+ *   - `MemoryTool` (`memory`) — read-only: search / show / timeline / status.
+ *   - `MemoryManageTool` (`memory_manage`) — pause / resume / deny list /
+ *     config / delete.
+ *
+ * Always local — screen memory never leaves the machine it was recorded on.
  */
 
-import { Tool, ToolContext, ToolResult, checkPermission, type Attachment } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, type Attachment, type ToolAnnotations } from "./base.js";
 
 const MAX_TEXT_CHARS = 6000;
+
+const TIME_PHRASES =
+  "Time phrases for since/until: '2h', '3d', 'yesterday', 'tuesday', " +
+  "'last week', 'this month', 'yesterday afternoon', '2026-09-01'.";
 
 export interface MemoryToolOptions {
   /** Override the opendesk home (default ~/.opendesk or $OPENDESK_HOME). */
   home?: string;
 }
 
-export class MemoryTool extends Tool {
-  name = "memory";
-  description =
-    "Recall what the user saw on screen in the past. A local background daemon " +
-    "(`opendesk-js memory start`) captures the screen every ~30s, OCRs it, and " +
-    "indexes the text with a thumbnail. Nothing is uploaded.\n\n" +
-    "Actions:\n" +
-    "  search   — full-text search. query='error', since='tuesday', app='Terminal'. " +
-    "Returns matching moments (id, time, app, window title, snippet).\n" +
-    "  show     — fetch one moment by id: full OCR text + thumbnail image.\n" +
-    "  timeline — list captured moments in a period, optionally filtered by app " +
-    "(e.g. 'every time the dashboard was open this month').\n" +
-    "  status   — is the daemon running/paused, how much is stored, config.\n" +
-    "  pause / resume — stop or restart capture (pause accepts duration='1h').\n" +
-    "  deny     — manage the per-app deny list (denyAdd / denyRemove).\n" +
-    "  config   — change intervalSeconds, storageCapMb, retentionDays.\n" +
-    "  delete   — remove stored moments for a time range and/or app.\n\n" +
-    "Time phrases for since/until: '2h', '3d', 'yesterday', 'tuesday', " +
-    "'last week', 'this month', 'yesterday afternoon', '2026-09-01'.\n" +
-    "Typical flow: search → pick an id → show to read the full text / image.";
-
-  schema = {
-    type: "object",
-    required: ["action"],
-    properties: {
-      action: {
-        type: "string",
-        enum: ["search", "show", "timeline", "status", "pause", "resume", "deny", "config", "delete"],
-        description: "What to do. See tool description.",
-      },
-      query: { type: "string", description: "Search terms (action=search). All terms must appear; quote phrases; 'invoice*' for prefix." },
-      since: { type: "string", description: "Start of the time window: '2h', 'yesterday', 'tuesday', 'last week', ISO date." },
-      until: { type: "string", description: "End of the time window (same formats as since)." },
-      app: { type: "string", description: "Only moments whose app name or window title contains this (case-insensitive)." },
-      limit: { type: "integer", minimum: 1, maximum: 200, default: 15, description: "Max results for search/timeline." },
-      id: { type: "integer", description: "Frame id (action=show)." },
-      includeImage: { type: "boolean", default: true, description: "For action=show: attach the thumbnail image." },
-      duration: { type: "string", description: "For action=pause: how long ('30m', '2h'). Omit to pause until resumed." },
-      denyAdd: { type: "string", description: "For action=deny: app name / title substring to add." },
-      denyRemove: { type: "string", description: "For action=deny: entry to remove." },
-      intervalSeconds: { type: "number", minimum: 5, description: "For action=config: seconds between captures." },
-      storageCapMb: { type: "integer", minimum: 16, description: "For action=config: storage ceiling in MB." },
-      retentionDays: { type: "integer", minimum: 1, description: "For action=config: delete frames older than this." },
-      confirm: { type: "boolean", default: false, description: "For action=delete: must be true to actually delete." },
-    },
-  };
-
+/** Shared plumbing for `MemoryTool` and `MemoryManageTool`. */
+export abstract class MemoryToolBase extends Tool {
   private home?: string;
 
   constructor(opts: MemoryToolOptions = {}) {
@@ -71,32 +34,26 @@ export class MemoryTool extends Tool {
     this.home = opts.home;
   }
 
-  private resolveHome(ctx: ToolContext): string | undefined {
+  protected resolveHome(ctx: ToolContext): string | undefined {
     if (this.home) return this.home;
     const meta = (ctx as { metadata?: Record<string, unknown> }).metadata;
     const h = meta?.["opendeskHome"] ?? meta?.["opendesk_home"];
     return typeof h === "string" && h ? h : undefined;
   }
 
+  /** Run `action`; return undefined for an action this tool doesn't own. */
+  protected abstract dispatch(action: string, home: string | undefined, p: Params): Promise<ToolResult> | undefined;
+
   async execute(ctx: ToolContext, params: Record<string, unknown>): Promise<ToolResult> {
     const p = params as Params;
     const action = String(p.action ?? "");
-    await checkPermission(ctx, "memory", action, `Screen memory: ${action}${p.query ? ` '${p.query}'` : ""}`);
+    await checkPermission(ctx, this.name, action, `Screen memory: ${action}${p.query ? ` '${p.query}'` : ""}`);
     const home = this.resolveHome(ctx);
 
     try {
-      switch (action) {
-        case "search": return await this.search(home, p);
-        case "show": return await this.show(home, p);
-        case "timeline": return await this.timeline(home, p);
-        case "status": return await this.status(home);
-        case "pause": return await this.pause(home, p);
-        case "resume": return await this.resume(home);
-        case "deny": return await this.deny(home, p);
-        case "config": return await this.configure(home, p);
-        case "delete": return await this.remove(home, p);
-        default: return this.err("Memory error", `Unknown action '${action}'`);
-      }
+      const pending = this.dispatch(action, home, p);
+      if (!pending) return this.err("Memory error", `Unknown action '${action}' for ${this.name}`);
+      return await pending;
     } catch (e) {
       return this.err("Memory error", e instanceof Error ? e.message : String(e));
     }
@@ -104,7 +61,7 @@ export class MemoryTool extends Tool {
 
   // -- search / show / timeline ------------------------------------------------
 
-  private async search(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async search(home: string | undefined, p: Params): Promise<ToolResult> {
     const { MemoryStore } = await import("../memory/store.js");
     const { fmtRange, parseRange } = await import("../memory/timeparse.js");
     if (!p.query || !String(p.query).trim()) {
@@ -125,7 +82,7 @@ export class MemoryTool extends Tool {
     return this.ok(`Memory: ${frames.length} match(es)`, lines.join("\n"), [], { count: frames.length, ids: frames.map((f) => f.id) });
   }
 
-  private async timeline(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async timeline(home: string | undefined, p: Params): Promise<ToolResult> {
     const { MemoryStore } = await import("../memory/store.js");
     const { fmtRange, parseRange } = await import("../memory/timeparse.js");
     const [start, end] = parseRange(p.since, p.until);
@@ -148,7 +105,7 @@ export class MemoryTool extends Tool {
     return this.ok(`Memory timeline (${frames.length})`, lines.join("\n"), [], { count: frames.length, ids: frames.map((f) => f.id) });
   }
 
-  private async show(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async show(home: string | undefined, p: Params): Promise<ToolResult> {
     const { MemoryStore, frameWhen } = await import("../memory/store.js");
     if (p.id === undefined || p.id === null) throw new Error("id is required for action='show'.");
     const store = new MemoryStore(home);
@@ -176,7 +133,7 @@ export class MemoryTool extends Tool {
 
   // -- status / control --------------------------------------------------------
 
-  private async status(home: string | undefined): Promise<ToolResult> {
+  protected async status(home: string | undefined): Promise<ToolResult> {
     const { MemoryStore } = await import("../memory/store.js");
     const { daemonAlive, describePause, getPause, loadConfig, readDaemonState } = await import("../memory/config.js");
     const { fmtTs } = await import("../memory/timeparse.js");
@@ -208,20 +165,20 @@ export class MemoryTool extends Tool {
     });
   }
 
-  private async pause(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async pause(home: string | undefined, p: Params): Promise<ToolResult> {
     const { describePause, parseDuration, setPause } = await import("../memory/config.js");
     const secs = p.duration ? parseDuration(String(p.duration)) : undefined;
     const state = setPause(home, { durationSeconds: secs, reason: "tool" });
     return this.ok("Memory paused", `Screen memory capture ${describePause(state)}.`);
   }
 
-  private async resume(home: string | undefined): Promise<ToolResult> {
+  protected async resume(home: string | undefined): Promise<ToolResult> {
     const { clearPause } = await import("../memory/config.js");
     const cleared = clearPause(home);
     return this.ok("Memory resumed", cleared ? "Screen memory capture resumed." : "Capture was not paused.");
   }
 
-  private async deny(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async deny(home: string | undefined, p: Params): Promise<ToolResult> {
     const { loadConfig, saveConfig } = await import("../memory/config.js");
     const cfg = loadConfig(home);
     const msgs: string[] = [];
@@ -233,7 +190,7 @@ export class MemoryTool extends Tool {
     return this.ok("Memory deny list", out, [], { denyApps: cfg.deny_apps });
   }
 
-  private async configure(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async configure(home: string | undefined, p: Params): Promise<ToolResult> {
     const { loadConfig, saveConfig } = await import("../memory/config.js");
     const cfg = loadConfig(home);
     const changed: string[] = [];
@@ -248,7 +205,7 @@ export class MemoryTool extends Tool {
     return this.ok("Memory config", lines.join("\n"), [], cfg.toDict() as unknown as Record<string, unknown>);
   }
 
-  private async remove(home: string | undefined, p: Params): Promise<ToolResult> {
+  protected async remove(home: string | undefined, p: Params): Promise<ToolResult> {
     const { MemoryStore } = await import("../memory/store.js");
     const { fmtRange, parseRange } = await import("../memory/timeparse.js");
     if (!(p.since || p.until || p.app)) {
@@ -265,7 +222,7 @@ export class MemoryTool extends Tool {
     return this.ok("Memory deleted", `Deleted ${n} moment(s) for ${scope}.`, [], { count: n });
   }
 
-  private async emptyHint(store: { stats(): { frames: number } }, home?: string): Promise<string> {
+  protected async emptyHint(store: { stats(): { frames: number } }, home?: string): Promise<string> {
     const { daemonAlive, getPause } = await import("../memory/config.js");
     if (store.stats().frames === 0) {
       if (!daemonAlive(home)) return "\nThe index is empty and the capture daemon is not running. Start it with `opendesk-js memory start`.";
@@ -318,4 +275,109 @@ function frameLine(f: import("../memory/store.js").Frame, snippet: boolean): str
 
 function mb(n: number): string {
   return (n / (1024 * 1024)).toFixed(1);
+}
+
+// ---------------------------------------------------------------------------
+// Public tools
+// ---------------------------------------------------------------------------
+
+const TIME_WINDOW_PROPS = {
+  since: { type: "string", description: "Start of the time window: '2h', 'yesterday', 'tuesday', 'last week', ISO date." },
+  until: { type: "string", description: "End of the time window (same formats as since)." },
+  app: { type: "string", description: "Only moments whose app name or window title contains this (case-insensitive)." },
+};
+
+/** Read-only recall over the local screen-memory history. */
+export class MemoryTool extends MemoryToolBase {
+  name = "memory";
+  title = "Search Screen Memory";
+  annotations: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+  description =
+    "Recall what the user saw on screen in the past. A local background daemon " +
+    "(`opendesk-js memory start`) captures the screen every ~30s, OCRs it, and " +
+    "indexes the text with a thumbnail. Nothing is uploaded. Read-only.\n\n" +
+    "Actions:\n" +
+    "  search   — full-text search. query='error', since='tuesday', app='Terminal'. " +
+    "Returns matching moments (id, time, app, window title, snippet).\n" +
+    "  show     — fetch one moment by id: full OCR text + thumbnail image.\n" +
+    "  timeline — list captured moments in a period, optionally filtered by app " +
+    "(e.g. 'every time the dashboard was open this month').\n" +
+    "  status   — is the daemon running/paused, how much is stored, config.\n\n" +
+    TIME_PHRASES + "\n" +
+    "Typical flow: search → pick an id → show to read the full text / image. " +
+    "To pause capture, edit the deny list, change config or delete history, use `memory_manage`.";
+
+  schema = {
+    type: "object",
+    required: ["action"],
+    properties: {
+      action: {
+        type: "string",
+        enum: ["search", "show", "timeline", "status"],
+        description: "What to do. See tool description.",
+      },
+      query: { type: "string", description: "Search terms (action=search). All terms must appear; quote phrases; 'invoice*' for prefix." },
+      ...TIME_WINDOW_PROPS,
+      limit: { type: "integer", minimum: 1, maximum: 200, default: 15, description: "Max results for search/timeline." },
+      id: { type: "integer", description: "Frame id (action=show)." },
+      includeImage: { type: "boolean", default: true, description: "For action=show: attach the thumbnail image." },
+    },
+  };
+
+  protected dispatch(action: string, home: string | undefined, p: Params): Promise<ToolResult> | undefined {
+    switch (action) {
+      case "search": return this.search(home, p);
+      case "show": return this.show(home, p);
+      case "timeline": return this.timeline(home, p);
+      case "status": return this.status(home);
+      default: return undefined;
+    }
+  }
+}
+
+/** State-changing controls for screen memory (pause, deny list, config, delete). */
+export class MemoryManageTool extends MemoryToolBase {
+  name = "memory_manage";
+  title = "Manage Screen Memory";
+  annotations: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+  description =
+    "Control the local screen-memory recorder (see the `memory` tool for searching it). " +
+    "Changes state on this machine only.\n\n" +
+    "Actions:\n" +
+    "  pause / resume — stop or restart capture (pause accepts duration='1h').\n" +
+    "  deny     — manage the per-app deny list (denyAdd / denyRemove); with neither, lists it.\n" +
+    "  config   — change intervalSeconds, storageCapMb, retentionDays; with none, shows the config.\n" +
+    "  delete   — remove stored moments for a time range and/or app. Dry run unless confirm=true.\n\n" +
+    TIME_PHRASES;
+
+  schema = {
+    type: "object",
+    required: ["action"],
+    properties: {
+      action: {
+        type: "string",
+        enum: ["pause", "resume", "deny", "config", "delete"],
+        description: "What to do. See tool description.",
+      },
+      duration: { type: "string", description: "For action=pause: how long ('30m', '2h'). Omit to pause until resumed." },
+      denyAdd: { type: "string", description: "For action=deny: app name / title substring to add." },
+      denyRemove: { type: "string", description: "For action=deny: entry to remove." },
+      intervalSeconds: { type: "number", minimum: 5, description: "For action=config: seconds between captures." },
+      storageCapMb: { type: "integer", minimum: 16, description: "For action=config: storage ceiling in MB." },
+      retentionDays: { type: "integer", minimum: 1, description: "For action=config: delete frames older than this." },
+      ...TIME_WINDOW_PROPS,
+      confirm: { type: "boolean", default: false, description: "For action=delete: must be true to actually delete." },
+    },
+  };
+
+  protected dispatch(action: string, home: string | undefined, p: Params): Promise<ToolResult> | undefined {
+    switch (action) {
+      case "pause": return this.pause(home, p);
+      case "resume": return this.resume(home);
+      case "deny": return this.deny(home, p);
+      case "config": return this.configure(home, p);
+      case "delete": return this.remove(home, p);
+      default: return undefined;
+    }
+  }
 }

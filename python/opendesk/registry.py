@@ -67,10 +67,11 @@ def create_registry() -> ToolRegistry:
     - ``ocr``        — extract text via pytesseract / Vision / WinRT
     - ``learn``      — record and replay computer tasks
     - ``audit``      — show the session audit log inside any MCP/agent session
-    - ``memory``     — search the local screen-memory history (desktop recall)
     - ``script``     — shell / AppleScript / JXA / PowerShell (prefer over GUI)
     - ``browser``    — drive Chrome/Edge/Brave via DevTools (local-only)
     - ``fleet``      — run one tool call across many paired peers in parallel
+    - ``memory``     — search the local screen-memory history (read-only recall)
+    - ``memory_manage`` — pause / deny-list / config / delete screen memory
     """
     from opendesk.tools.screenshot import ScreenshotTool
     from opendesk.tools.mouse import MouseTool
@@ -81,10 +82,10 @@ def create_registry() -> ToolRegistry:
     from opendesk.tools.ocr import OCRTool
     from opendesk.tools.automation import LearnTool, ScheduleTool
     from opendesk.tools.audit import AuditTool
-    from opendesk.tools.memory import MemoryTool
     from opendesk.tools.script import ScriptTool
     from opendesk.tools.browser import BrowserTool
     from opendesk.tools.fleet import FleetTool
+    from opendesk.tools.memory import MemoryManageTool, MemoryTool
 
     registry = ToolRegistry()
     for tool_cls in (
@@ -102,6 +103,7 @@ def create_registry() -> ToolRegistry:
         ScriptTool,
         BrowserTool,
         FleetTool,
+        MemoryManageTool,
     ):
         registry.register(tool_cls())
 

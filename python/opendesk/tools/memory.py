@@ -1,12 +1,17 @@
-"""MemoryTool — recall what was on screen at any point in the past.
+"""Screen-memory tools — recall what was on screen at any point in the past.
 
 Backed by the local screen-memory index in ``~/.opendesk/memory`` (see
 :mod:`opendesk.memory`).  The index is populated by the background daemon
-(``opendesk memory start``); this tool only *reads* it, plus a few control
-actions (pause / resume / deny list / delete).
+(``opendesk memory start``).  Two tools share this module so MCP clients can
+treat them differently:
 
-The tool always talks to the *local* index — screen memory never leaves
-the machine it was recorded on, so it is intentionally not peer-routable.
+* :class:`MemoryTool` (``memory``) — **read-only**: search / show /
+  timeline / status.
+* :class:`MemoryManageTool` (``memory_manage``) — control actions that
+  change state: pause / resume / deny list / config / delete.
+
+Both always talk to the *local* index — screen memory never leaves the
+machine it was recorded on, so they are intentionally not peer-routable.
 """
 
 from __future__ import annotations
@@ -21,83 +26,21 @@ from opendesk.tools.base import Attachment, Tool, ToolContext, ToolResult
 
 _MAX_TEXT_CHARS = 6000
 
+_TIME_PHRASES = (
+    "Time phrases for since/until: '2h', '3d', 'yesterday', 'tuesday', "
+    "'last week', 'this month', 'yesterday afternoon', '2026-09-01'."
+)
 
-class MemoryTool(Tool):
-    """Search and manage the local screen-memory history."""
 
-    name = "memory"
-    description = (
-        "Recall what the user saw on screen in the past. A local background "
-        "daemon (`opendesk memory start`) captures the screen every ~30s, OCRs it, "
-        "and indexes the text with a thumbnail. Nothing is uploaded.\n\n"
-        "Actions:\n"
-        "  search   — full-text search. query='error', since='tuesday', app='Terminal'. "
-        "Returns matching moments (id, time, app, window title, snippet).\n"
-        "  show     — fetch one moment by id: full OCR text + thumbnail image.\n"
-        "  timeline — list captured moments in a period, optionally filtered by app "
-        "(e.g. 'every time the dashboard was open this month').\n"
-        "  status   — is the daemon running/paused, how much is stored, config.\n"
-        "  pause / resume — stop or restart capture (pause accepts duration='1h').\n"
-        "  deny     — manage the per-app deny list (deny_add / deny_remove).\n"
-        "  config   — change interval_seconds, storage_cap_mb, retention_days.\n"
-        "  delete   — remove stored moments for a time range and/or app.\n\n"
-        "Time phrases for since/until: '2h', '3d', 'yesterday', 'tuesday', "
-        "'last week', 'this month', 'yesterday afternoon', '2026-09-01'.\n"
-        "Typical flow: search → pick an id → show to read the full text / image."
-    )
+class _MemoryToolBase(Tool):
+    """Shared plumbing for :class:`MemoryTool` and :class:`MemoryManageTool`.
 
-    class Params(Tool.Params):
-        action: Literal[
-            "search", "show", "timeline", "status", "pause", "resume",
-            "deny", "config", "delete",
-        ] = Field(description="What to do. See tool description.")
-        query: Optional[str] = Field(
-            default=None,
-            description=(
-                "Search terms (action=search). All terms must appear; quote phrases. "
-                "Append * for prefix match (e.g. 'invoice*')."
-            ),
-        )
-        since: Optional[str] = Field(
-            default=None,
-            description="Start of the time window: '2h', 'yesterday', 'tuesday', 'last week', ISO date.",
-        )
-        until: Optional[str] = Field(
-            default=None,
-            description="End of the time window (same formats as since).",
-        )
-        app: Optional[str] = Field(
-            default=None,
-            description="Only moments whose app name or window title contains this (case-insensitive).",
-        )
-        limit: int = Field(default=15, ge=1, le=200, description="Max results for search/timeline.")
-        id: Optional[int] = Field(default=None, description="Frame id (action=show).")
-        include_image: bool = Field(
-            default=True, description="For action=show: attach the thumbnail image.",
-        )
-        duration: Optional[str] = Field(
-            default=None,
-            description="For action=pause: how long ('30m', '2h'). Omit to pause until resumed.",
-        )
-        deny_add: Optional[str] = Field(
-            default=None, description="For action=deny: app name / title substring to add.",
-        )
-        deny_remove: Optional[str] = Field(
-            default=None, description="For action=deny: entry to remove.",
-        )
-        interval_seconds: Optional[float] = Field(
-            default=None, ge=5, description="For action=config: seconds between captures.",
-        )
-        storage_cap_mb: Optional[int] = Field(
-            default=None, ge=16, description="For action=config: storage ceiling in MB.",
-        )
-        retention_days: Optional[int] = Field(
-            default=None, ge=1, description="For action=config: delete frames older than this.",
-        )
-        confirm: bool = Field(
-            default=False,
-            description="For action=delete: must be true to actually delete.",
-        )
+    Subclasses define ``Params`` (with an ``action`` field) and
+    :meth:`_dispatch`.
+    """
+
+    name = "_memory_base"
+    description = ""
 
     def __init__(self, home: Optional[Path] = None) -> None:
         self._home = home
@@ -114,43 +57,31 @@ class MemoryTool(Tool):
         env = os.environ.get("OPENDESK_HOME")
         return Path(env).expanduser() if env else None
 
-    async def execute(self, ctx: ToolContext, params: "MemoryTool.Params") -> ToolResult:
+    def _dispatch(self, action: str, home: Optional[Path], params: Any) -> Optional[ToolResult]:
+        raise NotImplementedError
+
+    async def execute(self, ctx: ToolContext, params: Any) -> ToolResult:
         action = params.action
+        query = getattr(params, "query", None)
         await ctx.check_permission(
-            tool="memory", argument=action,
-            description=f"Screen memory: {action}"
-            + (f" {params.query!r}" if params.query else ""),
+            tool=self.name, argument=action,
+            description=f"Screen memory: {action}" + (f" {query!r}" if query else ""),
         )
         home = self._resolve_home(ctx)
 
         try:
-            if action == "search":
-                return self._search(home, params)
-            if action == "show":
-                return self._show(home, params)
-            if action == "timeline":
-                return self._timeline(home, params)
-            if action == "status":
-                return self._status(home)
-            if action == "pause":
-                return self._pause(home, params)
-            if action == "resume":
-                return self._resume(home)
-            if action == "deny":
-                return self._deny(home, params)
-            if action == "config":
-                return self._config(home, params)
-            if action == "delete":
-                return self._delete(home, params)
+            result = self._dispatch(action, home, params)
         except ValueError as exc:
             return ToolResult(title="Memory error", output=str(exc), error=True)
         except ImportError as exc:
             return ToolResult(title="Memory error", output=str(exc), error=True)
-        return ToolResult(title="Memory error", output=f"Unknown action {action!r}", error=True)
+        if result is None:
+            return ToolResult(title="Memory error", output=f"Unknown action {action!r}", error=True)
+        return result
 
     # -- search / show / timeline ---------------------------------------------
 
-    def _search(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _search(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.store import MemoryStore
         from opendesk.memory.timeparse import fmt_range, parse_range
 
@@ -181,7 +112,7 @@ class MemoryTool(Tool):
             metadata={"count": len(frames), "ids": [f.id for f in frames]},
         )
 
-    def _timeline(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _timeline(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.store import MemoryStore
         from opendesk.memory.timeparse import fmt_range, parse_range
 
@@ -216,7 +147,7 @@ class MemoryTool(Tool):
             metadata={"count": len(frames), "ids": [f.id for f in frames]},
         )
 
-    def _show(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _show(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.store import MemoryStore
 
         if p.id is None:
@@ -297,7 +228,7 @@ class MemoryTool(Tool):
             },
         )
 
-    def _pause(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _pause(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.config import parse_duration, set_pause
 
         secs = parse_duration(p.duration) if p.duration else None
@@ -313,7 +244,7 @@ class MemoryTool(Tool):
             output="Screen memory capture resumed." if cleared else "Capture was not paused.",
         )
 
-    def _deny(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _deny(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.config import load_config, save_config
 
         cfg = load_config(home)
@@ -334,7 +265,7 @@ class MemoryTool(Tool):
         )
         return ToolResult(title="Memory deny list", output=out, metadata={"deny_apps": cfg.deny_apps})
 
-    def _config(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _config(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.config import load_config, save_config
 
         cfg = load_config(home)
@@ -360,7 +291,7 @@ class MemoryTool(Tool):
             lines.append(f"  {k}: {v}")
         return ToolResult(title="Memory config", output="\n".join(lines), metadata=cfg.to_dict())
 
-    def _delete(self, home: Optional[Path], p: "MemoryTool.Params") -> ToolResult:
+    def _delete(self, home: Optional[Path], p: Any) -> ToolResult:
         from opendesk.memory.store import MemoryStore
         from opendesk.memory.timeparse import fmt_range, parse_range
 
@@ -423,3 +354,149 @@ def _frame_line(f: Any, *, snippet: bool = True) -> str:
 
 def _mb(n: int) -> str:
     return f"{n / (1024 * 1024):.1f}"
+
+
+# ---------------------------------------------------------------------------
+# Public tools
+# ---------------------------------------------------------------------------
+
+
+class MemoryTool(_MemoryToolBase):
+    """Read-only recall over the local screen-memory history."""
+
+    name = "memory"
+    title = "Search Screen Memory"
+    annotations = {"readOnlyHint": True, "openWorldHint": False}
+    description = (
+        "Recall what the user saw on screen in the past. A local background "
+        "daemon (`opendesk memory start`) captures the screen every ~30s, OCRs it, "
+        "and indexes the text with a thumbnail. Nothing is uploaded. Read-only.\n\n"
+        "Actions:\n"
+        "  search   — full-text search. query='error', since='tuesday', app='Terminal'. "
+        "Returns matching moments (id, time, app, window title, snippet).\n"
+        "  show     — fetch one moment by id: full OCR text + thumbnail image.\n"
+        "  timeline — list captured moments in a period, optionally filtered by app "
+        "(e.g. 'every time the dashboard was open this month').\n"
+        "  status   — is the daemon running/paused, how much is stored, config.\n\n"
+        + _TIME_PHRASES + "\n"
+        "Typical flow: search → pick an id → show to read the full text / image. "
+        "To pause capture, edit the deny list, change config or delete history, "
+        "use `memory_manage`."
+    )
+
+    class Params(Tool.Params):
+        action: Literal["search", "show", "timeline", "status"] = Field(
+            description="What to do. See tool description.",
+        )
+        query: Optional[str] = Field(
+            default=None,
+            description=(
+                "Search terms (action=search). All terms must appear; quote phrases. "
+                "Append * for prefix match (e.g. 'invoice*')."
+            ),
+        )
+        since: Optional[str] = Field(
+            default=None,
+            description="Start of the time window: '2h', 'yesterday', 'tuesday', 'last week', ISO date.",
+        )
+        until: Optional[str] = Field(
+            default=None,
+            description="End of the time window (same formats as since).",
+        )
+        app: Optional[str] = Field(
+            default=None,
+            description="Only moments whose app name or window title contains this (case-insensitive).",
+        )
+        limit: int = Field(default=15, ge=1, le=200, description="Max results for search/timeline.")
+        id: Optional[int] = Field(default=None, description="Frame id (action=show).")
+        include_image: bool = Field(
+            default=True, description="For action=show: attach the thumbnail image.",
+        )
+
+    def _dispatch(self, action: str, home: Optional[Path], params: Any) -> Optional[ToolResult]:
+        if action == "search":
+            return self._search(home, params)
+        if action == "show":
+            return self._show(home, params)
+        if action == "timeline":
+            return self._timeline(home, params)
+        if action == "status":
+            return self._status(home)
+        return None
+
+
+class MemoryManageTool(_MemoryToolBase):
+    """State-changing controls for screen memory (pause, deny list, config, delete)."""
+
+    name = "memory_manage"
+    title = "Manage Screen Memory"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": False,
+    }
+    description = (
+        "Control the local screen-memory recorder (see the `memory` tool for "
+        "searching it). Changes state on this machine only.\n\n"
+        "Actions:\n"
+        "  pause / resume — stop or restart capture (pause accepts duration='1h').\n"
+        "  deny     — manage the per-app deny list (deny_add / deny_remove); "
+        "with neither, lists it.\n"
+        "  config   — change interval_seconds, storage_cap_mb, retention_days; "
+        "with none, shows the config.\n"
+        "  delete   — remove stored moments for a time range and/or app. Dry run "
+        "unless confirm=true.\n\n"
+        + _TIME_PHRASES
+    )
+
+    class Params(Tool.Params):
+        action: Literal["pause", "resume", "deny", "config", "delete"] = Field(
+            description="What to do. See tool description.",
+        )
+        duration: Optional[str] = Field(
+            default=None,
+            description="For action=pause: how long ('30m', '2h'). Omit to pause until resumed.",
+        )
+        deny_add: Optional[str] = Field(
+            default=None, description="For action=deny: app name / title substring to add.",
+        )
+        deny_remove: Optional[str] = Field(
+            default=None, description="For action=deny: entry to remove.",
+        )
+        interval_seconds: Optional[float] = Field(
+            default=None, ge=5, description="For action=config: seconds between captures.",
+        )
+        storage_cap_mb: Optional[int] = Field(
+            default=None, ge=16, description="For action=config: storage ceiling in MB.",
+        )
+        retention_days: Optional[int] = Field(
+            default=None, ge=1, description="For action=config: delete frames older than this.",
+        )
+        since: Optional[str] = Field(
+            default=None,
+            description="For action=delete: start of the time window ('2h', 'yesterday', ISO date).",
+        )
+        until: Optional[str] = Field(
+            default=None,
+            description="For action=delete: end of the time window (same formats as since).",
+        )
+        app: Optional[str] = Field(
+            default=None,
+            description="For action=delete: only moments whose app name or window title contains this.",
+        )
+        confirm: bool = Field(
+            default=False,
+            description="For action=delete: must be true to actually delete.",
+        )
+
+    def _dispatch(self, action: str, home: Optional[Path], params: Any) -> Optional[ToolResult]:
+        if action == "pause":
+            return self._pause(home, params)
+        if action == "resume":
+            return self._resume(home)
+        if action == "deny":
+            return self._deny(home, params)
+        if action == "config":
+            return self._config(home, params)
+        if action == "delete":
+            return self._delete(home, params)
+        return None

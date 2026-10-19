@@ -1,4 +1,8 @@
 site_name: OpenDesk
+site_description: OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.
+site_url: https://vitalops.ai/opendesk/docs/
+repo_url: https://github.com/vitalops/opendesk
+repo_name: vitalops/opendesk
 
 theme:
   name: material
@@ -66,12 +70,13 @@ nav:
     - getting-started/index.md
     - Python: getting-started/python.md
     - JavaScript / TypeScript: getting-started/javascript.md
+    - Permissions: getting-started/permissions.md
   - MCP:
     - mcp/index.md
     - Install: mcp/install.md
     - Claude Code: mcp/claude-code.md
     - Claude Desktop: mcp/claude-desktop.md
-    - Cursor: mcp/cursor.md
+    - Cursor & VS Code: mcp/cursor.md
     - Continue: mcp/continue.md
     - Advanced: mcp/advanced.md
     - Troubleshooting: mcp/troubleshooting.md
@@ -94,11 +99,18 @@ nav:
     - audit: tools/audit.md
     - learn: tools/learn.md
     - memory: tools/memory.md
+    - script: tools/script.md
+    - browser: tools/browser.md
+    - fleet: tools/fleet.md
+  - Safety & Evaluation:
+    - Safety: safety.md
+    - Eval: eval.md
   - Automation:
     - automation/index.md
     - In Claude Code: automation/claude-code.md
     - Python API: automation/python-api.md
     - Scheduler: automation/scheduler.md
+    - Compiled replay: automation/compiled-replay.md
   - Architecture:
     - architecture/index.md
     - Computer & Tools: architecture/layers.md
@@ -106,6 +118,7 @@ nav:
     - Remote & Integrations: architecture/remote-layer.md
     - Data Flow: architecture/data-flow.md
     - Custom Tools: architecture/custom-tools.md
+    - Native helper: architecture/native-helper.md
   - Protocol:
     - protocol/index.md
     - Transport & Encoding: protocol/transport.md

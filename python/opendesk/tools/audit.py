@@ -50,6 +50,11 @@ class AuditTool(Tool):
     """
 
     name = "audit"
+    title = "Audit Log & Session Replay"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Show or replay the session audit log.\n"
         "  action='show'   — display recorded actions (format='summary' or 'full')\n"

@@ -68,13 +68,11 @@ export class OpenDeskClient {
     return this.call("audit", params as Record<string, unknown>);
   }
 
-  /** Screen memory — search / show / timeline / status / pause / resume / deny / config / delete. */
+  /** Screen memory (read-only) — search / show / timeline / status. */
   memory(params: {
-    action: "search" | "show" | "timeline" | "status" | "pause" | "resume" | "deny" | "config" | "delete";
+    action: "search" | "show" | "timeline" | "status";
     query?: string; since?: string; until?: string; app?: string; limit?: number;
-    id?: number; includeImage?: boolean; duration?: string;
-    denyAdd?: string; denyRemove?: string;
-    intervalSeconds?: number; storageCapMb?: number; retentionDays?: number; confirm?: boolean;
+    id?: number; includeImage?: boolean;
   }): Promise<ToolResult> {
     return this.call("memory", params as Record<string, unknown>);
   }
@@ -96,6 +94,16 @@ export class OpenDeskClient {
     clear?: boolean; submit?: boolean; fullPage?: boolean; maxChars?: number; timeout?: number;
   }): Promise<ToolResult> {
     return this.call("browser", params as Record<string, unknown>);
+  }
+
+  /** Screen memory controls — pause / resume / deny / config / delete. */
+  memoryManage(params: {
+    action: "pause" | "resume" | "deny" | "config" | "delete";
+    duration?: string; denyAdd?: string; denyRemove?: string;
+    intervalSeconds?: number; storageCapMb?: number; retentionDays?: number;
+    since?: string; until?: string; app?: string; confirm?: boolean;
+  }): Promise<ToolResult> {
+    return this.call("memory_manage", params as Record<string, unknown>);
   }
 
   listTools(): string[] {

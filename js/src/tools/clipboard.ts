@@ -1,8 +1,10 @@
-import { Tool, ToolContext, ToolResult, checkPermission } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 export class ClipboardTool extends Tool {
   name = "clipboard";
+  title = "Clipboard Read / Write";
+  annotations: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   description = "Read or write the system clipboard.";
 
   schema = {

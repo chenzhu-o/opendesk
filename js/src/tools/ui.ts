@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Tool, ToolContext, ToolResult, checkPermission } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 const exec = promisify(execFile);
 
 export class UITool extends Tool {
   name = "ui";
+  title = "Accessibility UI Actions";
+  annotations: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
   description =
     "Interact with UI elements by their accessible label — the primary interaction tool. " +
     "No pixel coordinates needed. Use this before the mouse tool.";

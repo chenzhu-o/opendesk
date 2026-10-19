@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use opendesk in your research or project, please cite it as below."
 title: "opendesk: Open Desktop Automation Framework"
-version: 0.2.0
+version: 0.3.0
 date-released: 2026-05-14
 url: "https://github.com/vitalops/opendesk"
 repository-code: "https://github.com/vitalops/opendesk"

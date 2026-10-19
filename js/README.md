@@ -1,8 +1,8 @@
-# @vitalops/opendesk-sdk — JavaScript/TypeScript SDK
+# @vitalops/opendesk-sdk — JavaScript/TypeScript SDK and MCP server
 
-Give any JavaScript or TypeScript AI agent eyes and hands on your desktop.
+**OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.**
 
-No Python required. All desktop automation runs natively in Node.js — screenshot capture, mouse/keyboard control, accessibility APIs, OCR, clipboard, and audit logging.
+Not affiliated with the openDesk office suite. No Python required. All desktop automation runs natively in Node.js — screenshot capture, mouse/keyboard control, accessibility APIs, OCR, clipboard, and audit logging.
 
 **Requirements:** Node.js 18+
 
@@ -10,20 +10,15 @@ No Python required. All desktop automation runs natively in Node.js — screensh
 
 ## MCP installation
 
-opendesk works with any MCP-compatible client — Claude Code, Claude Desktop, Cursor, Windsurf, Continue, or any custom tool.
+OpenDesk works with any MCP-compatible client — Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Continue, or any custom tool.
 
-### Claude Code (quickstart)
-
-```bash
-npm install @vitalops/opendesk-sdk
-npx opendesk-js install
-```
-
-To remove:
+### Claude Code (one command)
 
 ```bash
-npx opendesk-js uninstall
+claude mcp add opendesk -- npx -y -p @vitalops/opendesk-sdk opendesk-js-mcp
 ```
+
+Or, with the package installed: `npx opendesk-js install` (remove with `npx opendesk-js uninstall`).
 
 ### Claude Desktop / Cursor / Windsurf / Continue
 
@@ -32,13 +27,34 @@ Add to your MCP config file:
 ```json
 {
   "mcpServers": {
-    "opendesk": {
-      "command": "node",
-      "args": ["/path/to/node_modules/@vitalops/opendesk-sdk/bin/opendesk-mcp.js"]
-    }
+    "opendesk": { "command": "npx", "args": ["-y", "-p", "@vitalops/opendesk-sdk", "opendesk-js-mcp"] }
   }
 }
 ```
+
+`npx -y @vitalops/opendesk-sdk` also starts the MCP server (the package's default `opendesk-sdk` bin).
+
+### VS Code (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "opendesk": { "type": "stdio", "command": "npx", "args": ["-y", "-p", "@vitalops/opendesk-sdk", "opendesk-js-mcp"] }
+  }
+}
+```
+
+### Streamable HTTP
+
+```bash
+npx -p @vitalops/opendesk-sdk opendesk-js mcp --http --host 127.0.0.1 --port 8765
+```
+
+Clients connect to `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token comes from `--token`, `$OPENDESK_MCP_TOKEN`, or is generated once into `~/.opendesk/mcp-token` (mode 0600) and printed on start. `--no-auth` is only allowed on loopback.
+
+### macOS permissions
+
+Grant **Accessibility** and **Screen Recording** to the app that runs OpenDesk (Claude Desktop, your terminal for Claude Code, Cursor or VS Code) under System Settings → Privacy & Security, then restart that app. With the Python package, `uvx opendesk check --open` opens the right pane. [Details](https://vitalops.ai/opendesk/docs/getting-started/permissions.html)
 
 Config file locations:
 - **Claude Desktop (macOS):** `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -150,7 +166,7 @@ npx opendesk-js pair-with <host> <code> --name mini
 npx opendesk-js serve           # start the long-running daemon (controlled machine)
 ```
 
-See [docs/remote-js.md](../docs/remote-js.md) and [docs/protocol.md](../docs/protocol.md) for full details.
+See [remote control (JS)](https://vitalops.ai/opendesk/docs/remote-js/index.html) and the [protocol](https://vitalops.ai/opendesk/docs/protocol/index.html) for full details.
 
 ### MCP remote tools
 
@@ -164,6 +180,7 @@ Run `npx opendesk-js install` on the controller as normal. Every computer-use to
 | `opendesk_discover` | Browse the LAN for opendesk peers |
 | `opendesk_use <peer>` | Set default peer for subsequent calls (`"local"` to revert) |
 | `opendesk_status` | Show current default peer and open connections |
+| `opendesk_describe <peer>` | What a peer is for and what it has access to |
 | `opendesk_capabilities [peer]` | Capability manifest of a peer |
 | `opendesk_disconnect [peer]` | Close cached connection |
 
@@ -171,7 +188,7 @@ Run `npx opendesk-js install` on the controller as normal. Every computer-use to
 
 ## Tools
 
-Full reference: [docs/tools.md](../docs/tools.md)
+Full reference: [tools](https://vitalops.ai/opendesk/docs/tools/index.html)
 
 | Tool | Method | Description |
 |------|--------|-------------|
@@ -183,7 +200,10 @@ Full reference: [docs/tools.md](../docs/tools.md)
 | `clipboard` | `client.clipboard(params)` | Read/write system clipboard |
 | `ocr` | `client.ocr(params?)` | Extract text from screen |
 | `audit` | `client.audit(params?)` | Session audit log |
-| `memory` | `client.memory(params)` | Screen memory — search a local, OCR'd history of what was on screen |
+| `memory` | `client.memory(params)` | Screen memory (read-only) — search a local, OCR'd history of what was on screen |
+| `memory_manage` | `client.memoryManage(params)` | Pause capture, edit the deny list, change storage, delete history |
+
+Over MCP every tool has a `title` and `readOnlyHint` / `destructiveHint` annotations, failures return `isError: true`, and the server sends `instructions` describing the recommended workflow.
 
 ---
 
@@ -212,9 +232,9 @@ const hits = await client.memory({ action: "search", query: "error", app: "Termi
 const moment = await client.memory({ action: "show", id: hits.metadata.ids[0] });
 moment.attachments[0]            // { mediaType: "image/jpeg", content: Buffer }
 
-await client.memory({ action: "pause", duration: "1h" });
-await client.memory({ action: "deny", denyAdd: "bank" });
-await client.memory({ action: "config", storageCapMb: 512, retentionDays: 14 });
+await client.memoryManage({ action: "pause", duration: "1h" });
+await client.memoryManage({ action: "deny", denyAdd: "bank" });
+await client.memoryManage({ action: "config", storageCapMb: 512, retentionDays: 14 });
 ```
 
 - **Per-app deny list** — matched against app name *and* window title; password managers are excluded by default. `opendesk-js memory deny add "bank"`.
@@ -223,7 +243,7 @@ await client.memory({ action: "config", storageCapMb: 512, retentionDays: 14 });
 - **OCR** — macOS Vision (compiled once, offline) or Windows WinRT when available, otherwise the bundled tesseract.js (downloads its English model once and caches it locally).
 - The store format is shared with the Python SDK's `opendesk memory` config, pause flag, and deny list. Run only one daemon per home.
 
-Full reference → [docs/tools/memory.md](../docs/tools/memory.md)
+Full reference → [screen memory](https://vitalops.ai/opendesk/docs/tools/memory.html)
 
 ---
 
@@ -265,10 +285,12 @@ All platform-specific automation runs directly in Node.js. No external process i
 
 ## Docs
 
-- [Remote control (JS)](../docs/remote-js.md)
-- [Protocol](../docs/protocol.md)
-- [Tools reference](../docs/tools.md)
-- [Architecture](../docs/architecture.md)
+- [Getting started (JS)](https://vitalops.ai/opendesk/docs/getting-started/javascript.html)
+- [MCP setup](https://vitalops.ai/opendesk/docs/mcp/index.html)
+- [Remote control (JS)](https://vitalops.ai/opendesk/docs/remote-js/index.html)
+- [Protocol](https://vitalops.ai/opendesk/docs/protocol/index.html)
+- [Tools reference](https://vitalops.ai/opendesk/docs/tools/index.html)
+- [Architecture](https://vitalops.ai/opendesk/docs/architecture/index.html)
 
 ---
 

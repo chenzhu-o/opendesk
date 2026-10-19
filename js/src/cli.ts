@@ -95,9 +95,30 @@ async function cmdUninstall(): Promise<void> {
   uninstall();
 }
 
-async function cmdMcp(): Promise<void> {
-  const { runMcpStdio } = await import("./mcp.js");
-  await runMcpStdio();
+async function cmdMcp(argv: string[]): Promise<void> {
+  const { flags } = parseFlags(argv);
+  const home = resolveHome(str(flags["home"]) || undefined);
+  const transport = flags["http"] ? "http" : (str(flags["transport"]) || "stdio");
+  if (transport !== "stdio" && transport !== "http") fatal("--transport must be 'stdio' or 'http'");
+  if (transport === "stdio") {
+    const { runMcpStdio } = await import("./mcp.js");
+    await runMcpStdio(undefined, undefined, home);
+    return;
+  }
+  const noAuth = bool(flags["no-auth"]);
+  const token = str(flags["token"]) || undefined;
+  if (noAuth && token) fatal("--token and --no-auth are mutually exclusive");
+  const { runMcpHttp } = await import("./mcp.js");
+  try {
+    await runMcpHttp({
+      host: str(flags["host"]) || "127.0.0.1",
+      port: validatePort(flags["port"] ?? 8765),
+      token: noAuth ? null : token,
+      home,
+    });
+  } catch (e) {
+    fatal(e instanceof Error ? e.message : String(e), 2);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -815,7 +836,8 @@ Controller commands (run on the machine that drives others):
 Shared:
   install       Register the native MCP server with Claude Code
   uninstall     Remove the MCP server registration from Claude Code
-  mcp           Run the MCP server over stdio
+  mcp           Run the MCP server (stdio; --http [--host 127.0.0.1] [--port 8765]
+                [--token T | --no-auth] for streamable HTTP with bearer auth)
 
 Screen memory (local, searchable history of what was on screen):
   memory start            Run the capture daemon (--interval N, Ctrl-C to stop)
@@ -859,7 +881,7 @@ export async function main(): Promise<void> {
     switch (command) {
       case "install":     return await cmdInstall(rest);
       case "uninstall":   return await cmdUninstall();
-      case "mcp":         return await cmdMcp();
+      case "mcp":         return await cmdMcp(rest);
       case "serve":       return await cmdServe(rest);
       case "pair":        return await cmdPair(rest);
       case "pair-with":   return await cmdPairWith(rest);

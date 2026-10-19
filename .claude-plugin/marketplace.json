@@ -1,0 +1,17 @@
+{
+  "name": "opendesk",
+  "description": "OpenDesk by VitalOps — open-source computer use for Claude: see and control macOS, Windows and Linux desktops.",
+  "owner": {
+    "name": "VitalOps",
+    "url": "https://github.com/vitalops"
+  },
+  "plugins": [
+    {
+      "name": "opendesk",
+      "source": "./plugins/opendesk",
+      "description": "Computer use for Claude: screenshots, accessibility-based UI actions, mouse and keyboard, OCR, screen memory and paired remote machines.",
+      "category": "productivity",
+      "tags": ["computer-use", "desktop-automation", "mcp", "accessibility", "screenshot", "ocr"]
+    }
+  ]
+}

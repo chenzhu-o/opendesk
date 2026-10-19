@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "opendesk": {
+      "command": "uvx",
+      "args": ["--from", "opendesk==0.3.0", "opendesk-mcp"]
+    }
+  }
+}

@@ -1,0 +1,56 @@
+# OpenDesk
+
+> OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines. Python package `opendesk` (PyPI), JS/TS package `@vitalops/opendesk-sdk` (npm), MCP Registry name `io.github.vitalops/opendesk`. Not the openDesk office suite (ZenDiS).
+
+Install: `claude mcp add opendesk -- uvx --from opendesk opendesk-mcp` (Claude Code), `uvx opendesk mcp` (any stdio MCP client), `npx -y @vitalops/opendesk-sdk` (Node), `pip install opendesk` (Python SDK). Claude Code plugin: `claude plugin marketplace add vitalops/opendesk` then `claude plugin install opendesk@opendesk`. On macOS run `opendesk check --open` and grant Accessibility and Screen Recording to the app that runs OpenDesk. Preferred agent workflow: scripts/APIs when no GUI is needed, then `ui` (accessibility), then `screenshot(marks=true)`, then `mouse`; verify with screenshots.
+
+## Docs
+
+- [Overview](https://vitalops.ai/opendesk/docs/index.html): what OpenDesk is and the quick install
+- [Getting started](https://vitalops.ai/opendesk/docs/getting-started/index.html): Python and JS install matrix
+- [Python quickstart](https://vitalops.ai/opendesk/docs/getting-started/python.html): SDK examples, permission modes, sandbox
+- [JavaScript quickstart](https://vitalops.ai/opendesk/docs/getting-started/javascript.html): Node SDK, no Python required
+- [Permissions](https://vitalops.ai/opendesk/docs/getting-started/permissions.html): macOS Accessibility / Screen Recording, Linux packages, troubleshooting
+
+## MCP
+
+- [MCP overview](https://vitalops.ai/opendesk/docs/mcp/index.html): tools the agent sees, including peer admin tools
+- [Install](https://vitalops.ai/opendesk/docs/mcp/install.html): uvx, npx, pip, npm
+- [Claude Code](https://vitalops.ai/opendesk/docs/mcp/claude-code.html): one-command install and the plugin
+- [Claude Desktop](https://vitalops.ai/opendesk/docs/mcp/claude-desktop.html): .mcpb bundle and JSON config
+- [Cursor & VS Code](https://vitalops.ai/opendesk/docs/mcp/cursor.html): mcp.json configs
+- [Continue](https://vitalops.ai/opendesk/docs/mcp/continue.html): Continue config and other clients
+- [Advanced](https://vitalops.ai/opendesk/docs/mcp/advanced.html): streamable HTTP with bearer auth, annotations, isError, server instructions, embedding
+- [Troubleshooting](https://vitalops.ai/opendesk/docs/mcp/troubleshooting.html): permissions, PATH, uvx caching, HTTP auth errors
+
+## Tools
+
+- [Tools reference](https://vitalops.ai/opendesk/docs/tools/index.html): every tool, read-only vs acting
+- [ui](https://vitalops.ai/opendesk/docs/tools/ui.html): accessibility-based clicks and typing by element name
+- [screenshot](https://vitalops.ai/opendesk/docs/tools/screenshot.html): capture with Set-of-Marks
+- [mouse](https://vitalops.ai/opendesk/docs/tools/mouse.html): pixel-level control with Retina scaling
+- [keyboard](https://vitalops.ai/opendesk/docs/tools/keyboard.html): type, press, hotkeys
+- [app](https://vitalops.ai/opendesk/docs/tools/app.html): open, close, focus, list apps
+- [clipboard](https://vitalops.ai/opendesk/docs/tools/clipboard.html): read and write clipboard text
+- [ocr](https://vitalops.ai/opendesk/docs/tools/ocr.html): extract text from the screen
+- [audit](https://vitalops.ai/opendesk/docs/tools/audit.html): session audit log and replay
+- [learn](https://vitalops.ai/opendesk/docs/tools/learn.html): record and replay workflows
+- [memory](https://vitalops.ai/opendesk/docs/tools/memory.html): local searchable screen history (`memory`, `memory_manage`)
+
+## Remote
+
+- [Remote control (Python)](https://vitalops.ai/opendesk/docs/remote/index.html): pair and drive other machines
+- [Remote setup](https://vitalops.ai/opendesk/docs/remote/setup.html): pairing walkthrough
+- [Remote via MCP](https://vitalops.ai/opendesk/docs/remote/mcp.html): opendesk_peers, opendesk_use, the `peer` argument
+- [Remote security](https://vitalops.ai/opendesk/docs/remote/security.html): X25519 pairing, ChaCha20-Poly1305 frames
+- [Remote control (JS)](https://vitalops.ai/opendesk/docs/remote-js/index.html): the same from Node.js
+
+## Optional
+
+- [Integrations](https://vitalops.ai/opendesk/docs/integrations/index.html): Anthropic SDK, OpenAI, LangChain, custom
+- [Automation](https://vitalops.ai/opendesk/docs/automation/index.html): learn, replay and scheduler
+- [Architecture](https://vitalops.ai/opendesk/docs/architecture/index.html): layers, protocol, data flow
+- [Protocol](https://vitalops.ai/opendesk/docs/protocol/index.html): wire format, encryption, pairing
+- [README](https://github.com/vitalops/opendesk/blob/main/README.md): project overview
+- [server.json](https://github.com/vitalops/opendesk/blob/main/server.json): MCP Registry entry
+- [Privacy policy](https://github.com/vitalops/opendesk/blob/main/PRIVACY.md): everything stays local

@@ -31,6 +31,11 @@ class MouseTool(Tool):
     """Move, click, scroll, or drag the mouse pointer."""
 
     name = "mouse"
+    title = "Mouse Control"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Control the mouse: move to a position, click (left/right/middle), "
         "double-click, triple-click, scroll, or drag from one point to another. "

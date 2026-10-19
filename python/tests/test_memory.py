@@ -28,7 +28,7 @@ from opendesk.memory.config import (
 from opendesk.memory.store import MemoryStore, _terms
 from opendesk.memory.timeparse import parse_range, parse_when
 from opendesk.tools.base import ToolContext
-from opendesk.tools.memory import MemoryTool
+from opendesk.tools.memory import MemoryManageTool, MemoryTool
 
 PIL = pytest.importorskip("PIL")
 
@@ -508,7 +508,7 @@ def _ctx(home: Path) -> ToolContext:
     return ToolContext(session_id="mem-test", computer=FakeComputer(), metadata={"opendesk_home": str(home)})
 
 
-async def call(tool: MemoryTool, home: Path, **kw):
+async def call(tool: MemoryTool | MemoryManageTool, home: Path, **kw):
     return await tool.execute(_ctx(home), tool.parse_params(kw))
 
 
@@ -520,6 +520,24 @@ class TestMemoryTool:
         assert "memory" in reg
         schema = reg.get("memory").get_schema()
         assert "search" in schema["properties"]["action"]["enum"]
+
+    def test_read_and_manage_actions_are_split(self):
+        from opendesk.registry import create_registry
+        reg = create_registry()
+        read = set(reg.get("memory").get_schema()["properties"]["action"]["enum"])
+        manage = set(reg.get("memory_manage").get_schema()["properties"]["action"]["enum"])
+        assert read == {"search", "show", "timeline", "status"}
+        assert manage == {"pause", "resume", "deny", "config", "delete"}
+        assert reg.get("memory").tool_annotations()["readOnlyHint"] is True
+        ann = reg.get("memory_manage").tool_annotations()
+        assert ann["readOnlyHint"] is False and ann["destructiveHint"] is True
+
+    def test_read_tool_rejects_control_actions(self):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            MemoryTool().parse_params({"action": "delete", "app": "chrome", "confirm": True})
+        with pytest.raises(ValidationError):
+            MemoryManageTool().parse_params({"action": "search", "query": "x"})
 
     @pytest.mark.asyncio
     async def test_search_returns_hits_with_ids(self, tmp_path: Path):
@@ -580,25 +598,25 @@ class TestMemoryTool:
 
     @pytest.mark.asyncio
     async def test_pause_resume(self, tmp_path: Path):
-        r = await call(MemoryTool(), tmp_path, action="pause", duration="1h")
+        r = await call(MemoryManageTool(), tmp_path, action="pause", duration="1h")
         assert "paused" in r.output.lower()
         assert is_paused(tmp_path)
         r = await call(MemoryTool(), tmp_path, action="status")
         assert "PAUSED" in r.output
-        r = await call(MemoryTool(), tmp_path, action="resume")
+        r = await call(MemoryManageTool(), tmp_path, action="resume")
         assert not is_paused(tmp_path)
 
     @pytest.mark.asyncio
     async def test_deny_list_management(self, tmp_path: Path):
-        r = await call(MemoryTool(), tmp_path, action="deny", deny_add="Signal")
+        r = await call(MemoryManageTool(), tmp_path, action="deny", deny_add="Signal")
         assert "Signal" in r.metadata["deny_apps"]
         assert "Signal" in load_config(tmp_path).deny_apps
-        r = await call(MemoryTool(), tmp_path, action="deny", deny_remove="Signal")
+        r = await call(MemoryManageTool(), tmp_path, action="deny", deny_remove="Signal")
         assert "Signal" not in load_config(tmp_path).deny_apps
 
     @pytest.mark.asyncio
     async def test_config_update(self, tmp_path: Path):
-        r = await call(MemoryTool(), tmp_path, action="config", interval_seconds=15, storage_cap_mb=512, retention_days=7)
+        r = await call(MemoryManageTool(), tmp_path, action="config", interval_seconds=15, storage_cap_mb=512, retention_days=7)
         cfg = load_config(tmp_path)
         assert (cfg.interval_seconds, cfg.storage_cap_mb, cfg.retention_days) == (15, 512, 7)
         assert "Updated" in r.output
@@ -606,13 +624,13 @@ class TestMemoryTool:
     @pytest.mark.asyncio
     async def test_delete_requires_scope_and_confirm(self, tmp_path: Path):
         seeded_store(tmp_path).close()
-        r = await call(MemoryTool(), tmp_path, action="delete")
+        r = await call(MemoryManageTool(), tmp_path, action="delete")
         assert r.error
-        r = await call(MemoryTool(), tmp_path, action="delete", app="chrome")
+        r = await call(MemoryManageTool(), tmp_path, action="delete", app="chrome")
         assert "would be deleted" in r.output and r.metadata["count"] == 2
         with MemoryStore(tmp_path) as s:
             assert s.stats().frames == 5
-        r = await call(MemoryTool(), tmp_path, action="delete", app="chrome", confirm=True)
+        r = await call(MemoryManageTool(), tmp_path, action="delete", app="chrome", confirm=True)
         assert r.metadata["count"] == 2
         with MemoryStore(tmp_path) as s:
             assert s.stats().frames == 3

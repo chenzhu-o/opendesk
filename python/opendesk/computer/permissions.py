@@ -2,8 +2,9 @@
 
 On macOS, controlling mouse/keyboard requires the Accessibility entitlement
 and capturing the screen requires the Screen Recording entitlement.  Both
-are granted to the specific binary that *invokes* the API — usually the
-terminal (when developing) or the Python binary running ``opendesk serve``.
+are granted to the app that *launches* OpenDesk — Claude Desktop, the
+terminal running Claude Code, Cursor, VS Code — or the Python binary
+running ``opendesk serve``.  ``opendesk check --open`` jumps to the pane.
 
 When the entitlements are missing the failures are cryptic (silent
 no-input, all-black screenshots, AppleScript ``-1002`` errors).  This
@@ -163,14 +164,45 @@ _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 )
 
+_HOST_APPS = (
+    "the app that runs OpenDesk: Claude Desktop, your terminal (for Claude Code), "
+    "Cursor or VS Code"
+)
+
 _ACCESSIBILITY_HINT = (
-    "Grant Accessibility access to the terminal / Python binary running opendesk:\n"
+    f"Grant Accessibility access to {_HOST_APPS}:\n"
     "  System Settings → Privacy & Security → Accessibility → toggle the entry on.\n"
-    "If you don't see it listed, click the + and add it."
+    "If you don't see it listed, click the + and add it, then restart that app."
 )
 
 _SCREEN_RECORDING_HINT = (
-    "Grant Screen Recording access to the terminal / Python binary running opendesk:\n"
+    f"Grant Screen Recording access to {_HOST_APPS}:\n"
     "  System Settings → Privacy & Security → Screen Recording → toggle the entry on.\n"
-    "macOS may require relaunching the app after granting."
+    "macOS requires relaunching the app after granting."
 )
+
+#: Appended to tool errors that look like a missing macOS permission.
+PERMISSION_FIX = (
+    "Fix: on macOS, grant Accessibility and Screen Recording to the app that "
+    "runs OpenDesk (Claude Desktop, your terminal for Claude Code, Cursor or "
+    "VS Code), then restart that app. Run `opendesk check --open` to jump to "
+    "the right System Settings pane."
+)
+
+_PERMISSION_MARKERS = (
+    "accessibility permission", "accessibility access", "screen recording",
+    "assistive access", "not allowed assistive", "-1719", "-25211",
+    "privacy & security", "not authorized to send apple events",
+)
+
+
+def permission_hint(message: str) -> str:
+    """Return :data:`PERMISSION_FIX` if *message* looks like a macOS
+    permission failure (and doesn't already point at ``opendesk check``),
+    else ``""``."""
+    low = (message or "").lower()
+    if "opendesk check" in low:
+        return ""
+    if any(marker in low for marker in _PERMISSION_MARKERS):
+        return PERMISSION_FIX
+    return ""

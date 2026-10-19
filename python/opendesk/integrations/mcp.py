@@ -22,19 +22,28 @@ Pairing is intentionally not exposed: the 6-digit code should be typed by a
 human reading it off the controlled machine, not flow through the agent's
 text channel.  Use ``opendesk pair`` / ``opendesk pair-with`` from the CLI.
 
+Every tool is listed with a ``title`` and MCP ``ToolAnnotations``
+(``readOnlyHint`` / ``destructiveHint`` / …), and failed calls come back
+with ``isError: true``.  The server also sends ``instructions`` describing
+the recommended workflow (see :data:`SERVER_INSTRUCTIONS`).
+
 Usage — stdio transport (most common)::
 
-    # Run as standalone server:
-    python -m opendesk.integrations.mcp
+    # Zero-install, via uv:
+    uvx --from opendesk opendesk-mcp
 
-    # Or via the installed script:
+    # Or via the installed script / CLI:
     opendesk-mcp
+    opendesk mcp
+
+    # Streamable HTTP (bearer-token auth, loopback by default):
+    opendesk-mcp --transport http --port 8765
 
 Claude Desktop config::
 
     {
       "mcpServers": {
-        "opendesk": { "command": "opendesk-mcp" }
+        "opendesk": { "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
       }
     }
 """
@@ -44,9 +53,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from opendesk.integrations.mcp_session import LOCAL, MCPSession, MCPSessionError
 from opendesk.registry import ToolRegistry, create_registry
@@ -67,6 +76,29 @@ PEER_AWARE_TOOLS: set[str] = {
 # peers paired, none chosen) can't block them.
 LOCAL_ONLY_TOOLS: set[str] = {"browser", "fleet"}
 
+#: Description of the optional ``peer`` argument added to peer-aware tools.
+PEER_FIELD_DESCRIPTION = (
+    "Machine to run on: 'local' or a name from `opendesk_peers`. "
+    "Omit to use the session default (`opendesk_use`)."
+)
+
+#: Sent to clients in the MCP ``initialize`` result.
+SERVER_INSTRUCTIONS = """\
+OpenDesk lets you see and control a real desktop (macOS, Windows, Linux): this machine, or paired remote machines.
+
+Recommended workflow, cheapest and most reliable first:
+1. If the task needs no visual interaction (files, shell, an app's API or CLI), do it with scripts/APIs instead of driving the GUI.
+2. `ui` — the accessibility API. Inspect with action='get_tree', then act on elements by name/ref (click, type, click_menu). No coordinates needed.
+3. `screenshot` with marks=true — numbered boxes over interactive elements when the accessibility tree is not enough.
+4. `mouse` / `keyboard` — raw input as a last resort; pass image_width/image_height from the latest screenshot so coordinates scale correctly.
+Verify every state-changing step with a fresh `screenshot` before moving on.
+
+Remote machines: `opendesk_peers` lists paired peers, `opendesk_use` sets the default target, or pass `peer` on a single call. `opendesk_describe` explains what a peer is for.
+Screen history: `memory` searches what was on screen earlier (read-only); `memory_manage` pauses capture or deletes history.
+
+Safety: some actions may need the user's approval; if a call is denied, do not retry it, ask the user. The user can halt all actions with the kill switch at any time; if a call reports it is engaged, stop.
+If a tool reports missing macOS permissions, ask the user to run `opendesk check --open` and grant Accessibility and Screen Recording to the app running OpenDesk (Claude Desktop, their terminal for Claude Code, Cursor, VS Code), then restart that app."""
+
 
 # ---------------------------------------------------------------------------
 # Server factory
@@ -80,6 +112,8 @@ class ToolEntry:
     name: str
     description: str
     schema: dict[str, Any]
+    title: str = ""
+    annotations: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass
@@ -93,7 +127,23 @@ class ImageResult:
     mime_type: str
 
 
-ToolResult = list  # list[TextResult | ImageResult]
+class CallResult(list):
+    """``list[TextResult | ImageResult]`` plus an MCP ``isError`` flag.
+
+    Still a plain list, so callers that only index / iterate keep working.
+    """
+
+    def __init__(self, items: Iterable[Any] = (), *, is_error: bool = False) -> None:
+        super().__init__(items)
+        self.is_error = is_error
+
+
+ToolResult = CallResult  # backwards-compatible alias
+
+
+def _error(message: str) -> CallResult:
+    """An ``isError`` result with a single ``ERROR: …`` text block."""
+    return CallResult([TextResult(f"ERROR: {message}")], is_error=True)
 
 
 class MCPDispatcher:
@@ -126,13 +176,17 @@ class MCPDispatcher:
         entries: list[ToolEntry] = []
         for tool in self._registry.tools():
             schema = tool.get_schema()
-            description = tool.description
             if tool.name in PEER_AWARE_TOOLS:
                 schema = _augment_peer_field(schema)
-                description = _augment_peer_description(description)
-            entries.append(ToolEntry(tool.name, description, schema))
+            entries.append(ToolEntry(
+                tool.name, tool.description, schema,
+                title=tool.display_title(), annotations=tool.tool_annotations(),
+            ))
         for admin in _admin_tool_definitions():
-            entries.append(ToolEntry(admin.name, admin.description, admin.schema))
+            entries.append(ToolEntry(
+                admin.name, admin.description, admin.schema,
+                title=admin.title, annotations=dict(admin.annotations),
+            ))
         return entries
 
     def _safety_metadata(self, peer: str) -> dict[str, Any]:
@@ -143,7 +197,7 @@ class MCPDispatcher:
             meta["approver"] = self.approver
         return meta
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallResult:
         admin = _ADMIN_HANDLERS.get(name)
         if admin is not None:
             from opendesk.safety.guard import guarded_call
@@ -153,7 +207,7 @@ class MCPDispatcher:
                 try:
                     text = await admin(self._session, dict(args))
                 except (MCPSessionError, Exception) as exc:
-                    text = f"ERROR: {exc}"
+                    return _TR(title=name, output=str(exc), error=True)
                 return _TR(title=name, output=text)
 
             admin_ctx = ToolContext(
@@ -161,12 +215,14 @@ class MCPDispatcher:
                 metadata=self._safety_metadata(LOCAL),
             )
             res = await guarded_call(name, dict(arguments), admin_ctx, _run_admin)
-            return [TextResult(res.output)]
+            if res.error:
+                return _error(res.output)
+            return CallResult([TextResult(res.output)])
 
         try:
             tool = self._registry.get(name)
         except KeyError:
-            return [TextResult(f"ERROR: unknown tool {name!r}")]
+            return _error(f"unknown tool {name!r}")
 
         peer_arg: Optional[str] = None
         arguments = dict(arguments)
@@ -179,7 +235,7 @@ class MCPDispatcher:
         try:
             computer, computer_name = await self._session.resolve(peer_arg)
         except MCPSessionError as exc:
-            return [TextResult(f"ERROR: {exc}")]
+            return _error(str(exc))
 
         ctx = ToolContext(
             session_id=f"mcp-{computer_name}",
@@ -194,27 +250,72 @@ class MCPDispatcher:
         try:
             tool.parse_params(arguments)
         except Exception as exc:
-            return [TextResult(f"ERROR: invalid arguments: {exc}")]
+            return _error(f"invalid arguments: {exc}")
 
         from opendesk.safety.guard import run_tool
-        result = await run_tool(tool, ctx, arguments)
+        try:
+            result = await run_tool(tool, ctx, arguments)
+        except Exception as exc:
+            return _error(_with_permission_hint(f"{type(exc).__name__}: {exc}"))
 
-        out: ToolResult = []
-        prefix = "" if computer_name == LOCAL else f"[on {computer_name}] "
-        if result.output:
-            out.append(TextResult(prefix + result.output))
-        for att in result.attachments:
-            if att.media_type.startswith("image/"):
-                out.append(ImageResult(att.to_base64(), att.media_type))
-            else:
-                b64 = att.to_base64()
-                out.append(TextResult(
-                    f"[Attachment: {att.filename} ({att.media_type})]\n"
-                    f"data:{att.media_type};base64,{b64}"
-                ))
-        if not out:
-            out.append(TextResult("(no output)"))
-        return out
+        return _convert_result(result, computer_name)
+
+
+def _convert_result(result: Any, computer_name: str) -> CallResult:
+    """Turn a tool's :class:`~opendesk.tools.base.ToolResult` into MCP content."""
+    out = CallResult(is_error=bool(result.error))
+    prefix = "" if computer_name == LOCAL else f"[on {computer_name}] "
+    output = result.output
+    if result.error and output:
+        output = _with_permission_hint(output)
+    if output:
+        out.append(TextResult(prefix + output))
+    for att in result.attachments:
+        if att.media_type.startswith("image/"):
+            out.append(ImageResult(att.to_base64(), att.media_type))
+        else:
+            b64 = att.to_base64()
+            out.append(TextResult(
+                f"[Attachment: {att.filename} ({att.media_type})]\n"
+                f"data:{att.media_type};base64,{b64}"
+            ))
+    if not out:
+        out.append(TextResult("(no output)"))
+    return out
+
+
+def _with_permission_hint(text: str) -> str:
+    """Append the macOS permission fix to *text* when it looks like one."""
+    from opendesk.computer.permissions import permission_hint
+    hint = permission_hint(text)
+    return f"{text}\n\n{hint}" if hint else text
+
+
+def to_mcp_tool(entry: ToolEntry, mcp_types: Any) -> Any:
+    """Convert a :class:`ToolEntry` into ``mcp.types.Tool``."""
+    annotations = None
+    if entry.annotations or entry.title:
+        annotations = mcp_types.ToolAnnotations(title=entry.title or None, **entry.annotations)
+    return mcp_types.Tool(
+        name=entry.name,
+        title=entry.title or None,
+        description=entry.description,
+        inputSchema=entry.schema,
+        annotations=annotations,
+    )
+
+
+def to_mcp_result(out: CallResult, mcp_types: Any) -> Any:
+    """Convert a :class:`CallResult` into ``mcp.types.CallToolResult``."""
+    content: list[Any] = []
+    for item in out:
+        if isinstance(item, TextResult):
+            content.append(mcp_types.TextContent(type="text", text=item.text))
+        elif isinstance(item, ImageResult):
+            content.append(mcp_types.ImageContent(
+                type="image", data=item.data_base64, mimeType=item.mime_type,
+            ))
+    return mcp_types.CallToolResult(content=content, isError=bool(getattr(out, "is_error", False)))
 
 
 def create_mcp_server(
@@ -233,7 +334,7 @@ def create_mcp_server(
         from mcp import types as mcp_types
     except ImportError as exc:
         raise ImportError(
-            "The 'mcp' package is required: pip install 'opendesk[mcp]'"
+            "The 'mcp' package is required: pip install opendesk"
         ) from exc
 
     if registry is None:
@@ -241,32 +342,29 @@ def create_mcp_server(
     if session is None:
         session = MCPSession(home=home)
 
+    from opendesk import __version__
+
     dispatcher = MCPDispatcher(registry, session, permission_handler)
-    server = Server("opendesk")
+    server = Server(
+        "opendesk",
+        version=__version__,
+        instructions=SERVER_INSTRUCTIONS,
+        website_url="https://github.com/vitalops/opendesk",
+    )
     from opendesk.safety.approval import make_mcp_elicitation_approver
     dispatcher.approver = make_mcp_elicitation_approver(server)
 
     @server.list_tools()
     async def list_tools() -> list[mcp_types.Tool]:
-        return [
-            mcp_types.Tool(name=e.name, description=e.description, inputSchema=e.schema)
-            for e in await dispatcher.list_tools()
-        ]
+        return [to_mcp_tool(e, mcp_types) for e in await dispatcher.list_tools()]
 
     @server.call_tool()
-    async def call_tool(
-        name: str, arguments: dict[str, Any],
-    ) -> list[Any]:
-        out = await dispatcher.call_tool(name, arguments)
-        converted: list[Any] = []
-        for item in out:
-            if isinstance(item, TextResult):
-                converted.append(mcp_types.TextContent(type="text", text=item.text))
-            elif isinstance(item, ImageResult):
-                converted.append(mcp_types.ImageContent(
-                    type="image", data=item.data_base64, mimeType=item.mime_type,
-                ))
-        return converted
+    async def call_tool(name: str, arguments: dict[str, Any]) -> Any:
+        try:
+            out = await dispatcher.call_tool(name, arguments)
+        except Exception as exc:  # last-resort guard: never crash the transport
+            out = _error(f"{type(exc).__name__}: {exc}")
+        return to_mcp_result(out, mcp_types)
 
     # Allow callers to access state.
     server._opendesk_dispatcher = dispatcher  # type: ignore[attr-defined]
@@ -274,7 +372,7 @@ def create_mcp_server(
 
 
 # ---------------------------------------------------------------------------
-# Schema / description augmentation
+# Schema augmentation
 # ---------------------------------------------------------------------------
 
 
@@ -282,31 +380,21 @@ def _augment_peer_field(schema: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of *schema* with an optional ``peer`` field added."""
     schema = dict(schema)
     properties = dict(schema.get("properties") or {})
-    properties["peer"] = {
-        "type": "string",
-        "description": (
-            "Optional. Name of the peer to run this action on. "
-            "Use 'local' for the local machine, or any name from `opendesk_peers`. "
-            "When omitted, falls back to the session's default peer "
-            "(see `opendesk_status` / `opendesk_use`)."
-        ),
-    }
+    properties["peer"] = {"type": "string", "description": PEER_FIELD_DESCRIPTION}
     schema["properties"] = properties
     # Don't add to required.
     return schema
 
 
-def _augment_peer_description(description: str) -> str:
-    return (
-        description
-        + "\n\nRoutes to the session's default peer unless 'peer' is provided. "
-          "See `opendesk_peers` to list available targets."
-    )
-
-
 # ---------------------------------------------------------------------------
 # Admin tools
 # ---------------------------------------------------------------------------
+
+_ADMIN_READ_ONLY: dict[str, bool] = {"readOnlyHint": True, "openWorldHint": False}
+_ADMIN_SESSION_STATE: dict[str, bool] = {
+    "readOnlyHint": False, "destructiveHint": False,
+    "idempotentHint": True, "openWorldHint": False,
+}
 
 
 @dataclass
@@ -314,12 +402,16 @@ class _AdminTool:
     name: str
     description: str
     schema: dict[str, Any]
+    title: str = ""
+    annotations: dict[str, bool] = field(default_factory=dict)
 
 
 def _admin_tool_definitions() -> list[_AdminTool]:
     return [
         _AdminTool(
             name="opendesk_peers",
+            title="List Peers",
+            annotations=_ADMIN_READ_ONLY,
             description=(
                 "List the peers available to this MCP session. Returns the local "
                 "machine and every paired remote peer. The current default is "
@@ -329,6 +421,8 @@ def _admin_tool_definitions() -> list[_AdminTool]:
         ),
         _AdminTool(
             name="opendesk_discover",
+            title="Discover LAN Peers",
+            annotations={"readOnlyHint": True, "openWorldHint": True},
             description=(
                 "Discover opendesk peers advertising themselves on the LAN via "
                 "mDNS. May take a few seconds. Only paired peers can be used; "
@@ -348,6 +442,8 @@ def _admin_tool_definitions() -> list[_AdminTool]:
         ),
         _AdminTool(
             name="opendesk_use",
+            title="Set Default Peer",
+            annotations=_ADMIN_SESSION_STATE,
             description=(
                 "Set the default peer for subsequent Computer-use tool calls. "
                 "Pass 'local' (or omit `peer`) to revert to controlling this machine."
@@ -366,6 +462,8 @@ def _admin_tool_definitions() -> list[_AdminTool]:
         ),
         _AdminTool(
             name="opendesk_status",
+            title="Session Status",
+            annotations=_ADMIN_READ_ONLY,
             description=(
                 "Show the current default peer and the list of peers with open "
                 "cached connections in this session."
@@ -374,6 +472,8 @@ def _admin_tool_definitions() -> list[_AdminTool]:
         ),
         _AdminTool(
             name="opendesk_describe",
+            title="Describe Peer",
+            annotations=_ADMIN_READ_ONLY,
             description=(
                 "Return the full description of a paired peer — what that "
                 "machine is for, what apps / data it has access to.  Set "
@@ -396,6 +496,8 @@ def _admin_tool_definitions() -> list[_AdminTool]:
         ),
         _AdminTool(
             name="opendesk_capabilities",
+            title="Peer Capabilities",
+            annotations={"readOnlyHint": True, "openWorldHint": True},
             description=(
                 "Show what the given peer's backend can do (input devices, "
                 "screen capture, filesystem, etc.). Omit `peer` for the current "
@@ -414,6 +516,8 @@ def _admin_tool_definitions() -> list[_AdminTool]:
         ),
         _AdminTool(
             name="opendesk_disconnect",
+            title="Disconnect Peer",
+            annotations=_ADMIN_SESSION_STATE,
             description=(
                 "Close a cached remote connection. Pass `peer` to close one, "
                 "or omit it to close all remote connections."
@@ -421,7 +525,10 @@ def _admin_tool_definitions() -> list[_AdminTool]:
             schema={
                 "type": "object",
                 "properties": {
-                    "peer": {"type": "string"},
+                    "peer": {
+                        "type": "string",
+                        "description": "Peer name to disconnect; omit to close all.",
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -607,22 +714,22 @@ def _tags(tags: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# stdio entry point
+# Entry points (stdio / streamable HTTP)
 # ---------------------------------------------------------------------------
 
 
-async def _run_stdio() -> None:
+async def _run_stdio(home: Path | None = None) -> None:
     try:
         from mcp.server.stdio import stdio_server
     except ImportError as exc:
         print(
-            "ERROR: 'mcp' package not installed.  pip install 'opendesk[mcp]'",
+            "ERROR: 'mcp' package not installed.  pip install opendesk",
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
 
     registry = create_registry()
-    session = MCPSession()
+    session = MCPSession(home=home)
     server = create_mcp_server(registry, session)
     from opendesk.safety.control import start_kill_hotkey
     start_kill_hotkey(session.home)  # no-op unless policy.json sets kill_hotkey
@@ -637,9 +744,65 @@ async def _run_stdio() -> None:
 
 
 def run_stdio_server() -> None:
-    """Entry point for the ``opendesk-mcp`` console script."""
+    """Run the MCP server over stdio (kept for backwards compatibility)."""
     asyncio.run(_run_stdio())
 
 
+def build_arg_parser(prog: str = "opendesk-mcp") -> Any:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description=(
+            "OpenDesk MCP server — computer use for AI agents. "
+            "Defaults to stdio; use --transport http for streamable HTTP."
+        ),
+    )
+    parser.add_argument(
+        "--transport", choices=["stdio", "http"], default="stdio",
+        help="stdio (default, for Claude Desktop / Claude Code / Cursor) or http (streamable HTTP).",
+    )
+    parser.add_argument("--http", dest="transport", action="store_const", const="http",
+                        help="Shorthand for --transport http.")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default 127.0.0.1).")
+    parser.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765).")
+    parser.add_argument(
+        "--token", default=None,
+        help=(
+            "Bearer token clients must send (HTTP only). Default: $OPENDESK_MCP_TOKEN, "
+            "else generated once and stored in <home>/mcp-token (mode 0600)."
+        ),
+    )
+    parser.add_argument(
+        "--no-auth", action="store_true",
+        help="Disable bearer auth (HTTP, loopback binds only).",
+    )
+    parser.add_argument("--home", default=None, help="opendesk home (default ~/.opendesk).")
+    parser.add_argument("--version", action="store_true", help="Print the version and exit.")
+    return parser
+
+
+def main(argv: Optional[list[str]] = None, prog: str = "opendesk-mcp") -> None:
+    """Entry point for the ``opendesk-mcp`` console script and ``opendesk mcp``."""
+    args = build_arg_parser(prog).parse_args(argv)
+    if args.version:
+        from opendesk import __version__
+        print(f"opendesk-mcp {__version__}")
+        return
+    home = Path(args.home).expanduser() if args.home else None
+    if args.transport == "http":
+        from opendesk.integrations.mcp_http import run_http_server
+        try:
+            run_http_server(
+                host=args.host, port=args.port, token=args.token,
+                no_auth=args.no_auth, home=home,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(2) from exc
+        return
+    asyncio.run(_run_stdio(home))
+
+
 if __name__ == "__main__":
-    run_stdio_server()
+    main()

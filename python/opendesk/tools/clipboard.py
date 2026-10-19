@@ -14,6 +14,11 @@ class ClipboardTool(Tool):
     """Read or write the system clipboard."""
 
     name = "clipboard"
+    title = "Clipboard Read / Write"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": False,
+        "idempotentHint": True, "openWorldHint": False,
+    }
     description = (
         "Read the current clipboard text or write new text to the clipboard. "
         "Use 'read' to retrieve copied text; 'write' to place text on the clipboard."

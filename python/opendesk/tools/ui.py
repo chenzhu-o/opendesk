@@ -118,6 +118,11 @@ class UITool(Tool):
     """
 
     name = "ui"
+    title = "Accessibility UI Actions"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Interact with UI elements by name on any OS — no coordinates needed. "
         "ALWAYS try this before the mouse tool. Actions:\n"

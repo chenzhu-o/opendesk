@@ -1,17 +1,19 @@
 <div align="center">
 
-# opendesk
+# OpenDesk
 
-**Give any AI agent eyes and hands on your desktop.**
+**OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.**
 
-Opendesk is a computer use framework that lets AI agents navigate your computer just like a human would — screenshots, mouse, keyboard, UI interaction, OCR, workflow recording, scheduling, and remote machine control.
+Screenshots, accessibility-based UI actions, mouse and keyboard, OCR, workflow recording, scheduling, a local screen memory, and remote machine control, all from natural language.
 
 **macOS · Linux · Windows**
 
 [![PyPI](https://img.shields.io/pypi/v/opendesk?label=pypi%20opendesk)](https://pypi.org/project/opendesk/)
 [![npm](https://img.shields.io/npm/v/@vitalops/opendesk-sdk?label=npm%20opendesk-sdk)](https://www.npmjs.com/package/@vitalops/opendesk-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-vitalops.github.io-blue)](https://vitalops.github.io/opendesk/docs/)
+[![Docs](https://img.shields.io/badge/docs-vitalops.ai-blue)](https://vitalops.ai/opendesk/docs/)
+
+<sub>Not affiliated with the openDesk office suite.</sub>
 
 </div>
 
@@ -42,61 +44,63 @@ https://github.com/user-attachments/assets/659c9e30-e8f6-4a5a-ab81-0fa7ccaf8fb8
 
 ---
 
-## SDKs
+## Install
+
+OpenDesk runs as an MCP server for Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Continue or any other MCP client. The commands below need [uv](https://docs.astral.sh/uv/) (Python) or Node.js 18+; nothing else has to be installed first.
+
+**Claude Code**, one command:
+
+```bash
+claude mcp add opendesk -- uvx --from opendesk opendesk-mcp
+```
+
+**Claude Code plugin** (MCP server plus a skill that teaches Claude the workflow):
+
+```bash
+claude plugin marketplace add vitalops/opendesk
+claude plugin install opendesk@opendesk
+```
+
+**Claude Desktop**: download `opendesk-<version>.mcpb` from [Releases](https://github.com/vitalops/opendesk/releases) and double-click it, or add the JSON below to `claude_desktop_config.json`.
+
+**Cursor** (`~/.cursor/mcp.json`), Claude Desktop, Windsurf, Continue:
+
+```json
+{
+  "mcpServers": {
+    "opendesk": { "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
+  }
+}
+```
+
+**VS Code** (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "opendesk": { "type": "stdio", "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
+  }
+}
+```
+
+**No Python?** Use the Node.js server instead, in any of the configs above:
+
+```json
+{ "command": "npx", "args": ["-y", "-p", "@vitalops/opendesk-sdk", "opendesk-js-mcp"] }
+```
+
+**Remote clients** can use streamable HTTP with bearer-token auth: `uvx opendesk mcp --transport http --port 8765` ([details](docs/mcp/advanced.md)).
+
+> **macOS:** run `uvx opendesk check --open`, then grant **Accessibility** and **Screen Recording** to the app that runs OpenDesk (Claude Desktop, your terminal for Claude Code, Cursor or VS Code) and restart that app. See [permissions](#system-permissions).
+
+### SDKs
 
 | Language | Location | Package | Install |
 |----------|----------|---------|---------|
-| Python | [`python/`](python/) | `opendesk` (PyPI) | `pip install 'opendesk[core,mcp]'` |
+| Python 3.10+ | [`python/`](python/) | `opendesk` (PyPI) | `pip install opendesk` |
 | JavaScript / TypeScript | [`js/`](js/) | `@vitalops/opendesk-sdk` (npm) | `npm install @vitalops/opendesk-sdk` |
 
-More SDKs can be added to this repo following the same pattern.
-
----
-
-## MCP install
-
-opendesk works as an MCP server with any MCP-compatible client — Claude Code, Claude Desktop, Cursor, Windsurf, Continue, or any custom tool.
-
-### Python
-
-```bash
-pip install 'opendesk[core,mcp]'
-opendesk install        # shortcut for Claude Code
-```
-
-> Requires Python 3.10+
-
-### JavaScript / TypeScript
-
-```bash
-npm install @vitalops/opendesk-sdk
-npx opendesk-js install        # shortcut for Claude Code
-```
-
-### Other MCP clients (Cursor, Windsurf, Continue, custom)
-
-Point your client at the `opendesk-mcp` binary:
-
-```json
-{
-  "mcpServers": {
-    "opendesk": { "command": "opendesk-mcp" }
-  }
-}
-```
-
-For JS:
-
-```json
-{
-  "mcpServers": {
-    "opendesk": {
-      "command": "node",
-      "args": ["/path/to/node_modules/@vitalops/opendesk-sdk/bin/opendesk-mcp.js"]
-    }
-  }
-}
-```
+`pip install opendesk` includes the MCP server and local computer use; `opendesk install` registers it with Claude Code (`npx opendesk-js install` for the JS server).
 
 Once connected, try:
 
@@ -148,7 +152,7 @@ opendesk is built in independently-importable layers:
 ├──────────────────────────────────────────────────────────────┤
 │  Tools          screenshot · mouse · keyboard · ui ·         │
 │                 clipboard · ocr · learn · schedule · audit · │
-│                 memory                                       │
+│                 memory · memory_manage                       │
 ├──────────────────────────────────────────────────────────────┤
 │  Computer       LocalComputer  ·  RemoteComputer  (ABC)      │
 ├──────────────────────────────────────────────────────────────┤
@@ -169,7 +173,7 @@ opendesk is built in independently-importable layers:
 | **Automation** | `learn` + `schedule` backed by pynput recording, JSON storage, APScheduler daemon. |
 | **Memory** | `opendesk memory start` captures the screen every ~30 s, OCRs it locally, and indexes text + thumbnails in SQLite/FTS5. Per-app deny list, pause hotkey, storage cap with rolling deletion. Nothing leaves the machine. |
 
-Full details → [docs/architecture.md](docs/architecture.md)
+Full details → [docs/architecture](docs/architecture/index.md)
 
 ---
 
@@ -186,9 +190,14 @@ Full details → [docs/architecture.md](docs/architecture.md)
 | `ocr` | Extract text from any region of the screen |
 | `learn` | Record a workflow once, replay it anytime |
 | `schedule` | Run any task or learned procedure on a timer |
-| `memory` | Screen memory — recall anything that was on screen, fully local (`opendesk memory start`) |
+| `audit` | Show the session audit log, replay a session |
+| `memory` | Screen memory (read-only): recall anything that was on screen, fully local (`opendesk memory start`) |
+| `memory_manage` | Pause capture, edit the deny list, change retention, delete history |
+| `opendesk_*` | Pick and inspect paired remote machines (`opendesk_peers`, `opendesk_use`, …) |
 
-Full reference → [docs/tools.md](docs/tools.md)
+Every tool carries an MCP `title` and `readOnlyHint` / `destructiveHint` annotations, so clients can auto-approve read-only calls and ask before actions.
+
+Full reference → [docs/tools](docs/tools/index.md)
 
 ---
 
@@ -220,7 +229,7 @@ opendesk scheduler start
 
 Supported timing: `every 30m` · `every 2h` · `every day at 09:00` · `every friday at 17:00` · raw cron
 
-Full guide → [docs/automation.md](docs/automation.md)
+Full guide → [docs/automation](docs/automation/index.md)
 
 ---
 
@@ -230,7 +239,7 @@ A searchable, fully local history of what was on your screen — like Rewind or 
 
 ```bash
 # Python
-pip install 'opendesk[core,mcp,memory]'
+pip install 'opendesk[memory]'
 opendesk memory start            # or: opendesk memory install-service (run at login)
 
 # JavaScript / TypeScript
@@ -238,7 +247,7 @@ npm install @vitalops/opendesk-sdk
 npx opendesk-js memory start     # or: npx opendesk-js memory install-service
 ```
 
-Every ~30 s the daemon captures the screen, OCRs it **on your machine**, and stores the text plus a small thumbnail in `~/.opendesk/memory`. Then ask:
+Every ~30 s the daemon captures the screen, OCRs it **on your machine**, and stores the text plus a small thumbnail in `~/.opendesk/memory`. Agents search it with the read-only `memory` tool; `memory_manage` pauses capture or deletes history. Then ask:
 
 ```
 "What was the error message I saw in the terminal on Tuesday?"
@@ -263,7 +272,7 @@ Control another machine from your agent — same tools, same MCP server, the
 **On the machine being controlled** (one time):
 
 ```bash
-pip install 'opendesk[core,remote]'
+pip install 'opendesk[remote]'
 opendesk pair        # prints a 6-digit code, listens
 ```
 
@@ -316,21 +325,23 @@ Subsequent connections use mutual static-key authentication. Every frame is
 ChaCha20-Poly1305 AEAD-encrypted with per-direction counters. No CA-signed
 certificates required — the keys ARE the trust.
 
-Full guide → [docs/remote.md](docs/remote.md)
+Full guide → [docs/remote](docs/remote/index.md)
 
 ---
 
 ## Installation options
 
 ```bash
-pip install opendesk                              # core framework only
-pip install 'opendesk[core,mcp]'                  # + screen capture + MCP server (recommended)
-pip install 'opendesk[core,mcp,remote]'           # + control another machine over LAN
-pip install 'opendesk[core,mcp,learn]'            # + task recording and replay
-pip install 'opendesk[core,mcp,learn,schedule]'   # + scheduled tasks
-pip install 'opendesk[core,mcp,memory]'           # + screen memory (searchable desktop history)
-pip install 'opendesk[all]'                       # everything
+uvx opendesk mcp                         # run the MCP server without installing anything
+pip install opendesk                     # MCP server + local computer use (screen capture, mouse, keyboard)
+pip install 'opendesk[remote]'           # + control another machine over LAN
+pip install 'opendesk[learn]'            # + task recording and replay
+pip install 'opendesk[learn,schedule]'   # + scheduled tasks
+pip install 'opendesk[memory]'           # + screen memory (searchable desktop history)
+pip install 'opendesk[all]'              # everything
 ```
+
+The `core` and `mcp` extras from earlier versions still work; they are now part of the base install.
 
 ---
 
@@ -354,8 +365,18 @@ pip install 'opendesk[all]'                       # everything
 ## System permissions
 
 ### macOS
-- **System Settings → Privacy & Security → Screen Recording** — enable for your terminal
-- **System Settings → Privacy & Security → Accessibility** — enable for mouse/keyboard control
+
+```bash
+opendesk check --open        # or: uvx opendesk check --open
+```
+
+It reports what is missing and opens the right System Settings pane. Grant **Accessibility** (mouse, keyboard, UI actions) and **Screen Recording** (screenshots, OCR) to **the app that runs OpenDesk**:
+
+- **Claude Desktop** when you use the `.mcpb` bundle or `claude_desktop_config.json`
+- **your terminal** (Terminal, iTerm2, Ghostty, …) for Claude Code
+- **Cursor** or **VS Code** when they launch the server
+
+Then quit and reopen that app. When a permission is missing, tool errors say so and point back to `opendesk check --open`.
 
 ### Linux
 ```bash
@@ -365,7 +386,7 @@ sudo apt install xclip xdotool python3-atspi
 ### Windows
 No extra permissions needed — opendesk uses Win32 APIs by default.
 
-See [docs/permissions.md](docs/permissions.md) for full setup guide.
+See [docs/getting-started/permissions.md](docs/getting-started/permissions.md) for the full setup guide.
 
 ---
 
@@ -373,6 +394,8 @@ See [docs/permissions.md](docs/permissions.md) for full setup guide.
 
 ### Claude Code
 ```bash
+claude mcp add opendesk -- uvx --from opendesk opendesk-mcp
+# or, after `pip install opendesk`:
 opendesk install        # registers opendesk-mcp globally
 opendesk uninstall      # removes the registration
 ```
@@ -387,10 +410,12 @@ Add to your config file:
 ```json
 {
   "mcpServers": {
-    "opendesk": { "command": "opendesk-mcp" }
+    "opendesk": { "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
   }
 }
 ```
+
+Or install the one-click `.mcpb` bundle from [Releases](https://github.com/vitalops/opendesk/releases).
 
 ### Python API
 
@@ -410,7 +435,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Works with Anthropic SDK, OpenAI, and LangChain — see [docs/integrations.md](docs/integrations.md)
+Works with Anthropic SDK, OpenAI, and LangChain — see [docs/integrations](docs/integrations/index.md)
 
 ### On-device models (Ollama, LM Studio, vLLM, llama.cpp)
 
@@ -429,7 +454,7 @@ result = await adapter.run_loop(client, model="qwen2.5:72b", messages=messages)
 
 ## Citation
 
-If you use opendesk in your research or project, please cite it:
+If you use OpenDesk in your research or project, please cite it:
 
 ```bibtex
 @software{opendesk,
@@ -437,12 +462,21 @@ If you use opendesk in your research or project, please cite it:
   title   = {opendesk: Open Desktop Automation Framework},
   year    = {2026},
   url     = {https://github.com/vitalops/opendesk},
-  version = {0.2.0},
+  version = {0.3.0},
   license = {MIT}
 }
 ```
 
 A `CITATION.cff` is included — GitHub's "Cite this repository" button will pick it up automatically.
+
+---
+
+## Documentation
+
+- Docs: <https://vitalops.ai/opendesk/docs/>
+- For LLMs and coding agents: [`llms.txt`](llms.txt), [`AGENTS.md`](AGENTS.md)
+- MCP Registry entry: [`server.json`](server.json) (`io.github.vitalops/opendesk`)
+- Privacy: [`PRIVACY.md`](PRIVACY.md)
 
 ---
 

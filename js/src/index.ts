@@ -3,7 +3,11 @@
  */
 
 export { OpenDeskClient, type OpenDeskClientOptions } from "./client.js";
-export { createMcpServer, runMcpStdio } from "./mcp.js";
+export {
+  createMcpServer, runMcpStdio, runMcpHttp, createMcpHttpHandler, listMcpTools, callMcpTool,
+  resolveMcpToken, SERVER_INSTRUCTIONS, SERVER_VERSION,
+  type McpHttpOptions, type McpToolDefinition, type McpCallResult,
+} from "./mcp.js";
 export { ToolRegistry, createRegistry } from "./registry.js";
 export {
   Tool,
@@ -11,6 +15,10 @@ export {
   type ToolContext,
   type PermissionHandler,
   type Attachment,
+  type ToolAnnotations,
+  displayTitle,
+  toolAnnotations,
+  permissionHint,
   allowAllContext,
   checkPermission,
   PermissionDeniedError,
@@ -26,7 +34,7 @@ export { AdminClient, AdminServer, AdminError, type SessionInfo, type SessionsPr
 export { AuditLog, type AuditEntry } from "./remote/audit.js";
 
 // Screen memory — local, searchable desktop history
-export { MemoryTool, type MemoryToolOptions } from "./tools/memory.js";
+export { MemoryTool, MemoryManageTool, type MemoryToolOptions } from "./tools/memory.js";
 export {
   MemoryStore, MemoryConfig, ScreenMemoryRecorder, startDaemon as startMemoryDaemon,
   loadConfig as loadMemoryConfig, saveConfig as saveMemoryConfig, memoryDir,

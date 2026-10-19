@@ -13,7 +13,7 @@ import { makeThumbnail, frameSignature, signatureDelta } from "../src/memory/ima
 import { ScreenMemoryRecorder } from "../src/memory/recorder.js";
 import { renderLaunchdPlist, renderSystemdUnit, renderSchtasksCommand, LAUNCHD_LABEL } from "../src/memory/service.js";
 import { parseCombo } from "../src/memory/hotkey.js";
-import { MemoryTool } from "../src/tools/memory.js";
+import { MemoryTool, MemoryManageTool } from "../src/tools/memory.js";
 import { createRegistry } from "../src/registry.js";
 import type { ToolContext } from "../src/tools/base.js";
 
@@ -433,6 +433,20 @@ describe("MemoryTool", () => {
     expect((t.schema as { properties: { action: { enum: string[] } } }).properties.action.enum).toContain("search");
   });
 
+  it("splits read-only actions from management actions", async () => {
+    const reg = createRegistry();
+    const enumOf = (name: string) =>
+      (reg.get(name).schema as { properties: { action: { enum: string[] } } }).properties.action.enum;
+    expect(new Set(enumOf("memory"))).toEqual(new Set(["search", "show", "timeline", "status"]));
+    expect(new Set(enumOf("memory_manage"))).toEqual(new Set(["pause", "resume", "deny", "config", "delete"]));
+    expect(reg.get("memory").annotations?.readOnlyHint).toBe(true);
+    expect(reg.get("memory_manage").annotations?.destructiveHint).toBe(true);
+    const r = await new MemoryTool().execute(ctx(home), { action: "delete", app: "chrome", confirm: true });
+    expect(r.error).toBe(true);
+    const r2 = await new MemoryManageTool().execute(ctx(home), { action: "search", query: "x" });
+    expect(r2.error).toBe(true);
+  });
+
   it("search returns hits with ids and honours time phrases", async () => {
     seeded(home);
     const tool = new MemoryTool();
@@ -473,23 +487,24 @@ describe("MemoryTool", () => {
   it("timeline, status, pause/resume, deny, config", async () => {
     seeded(home);
     const tool = new MemoryTool();
+    const manage = new MemoryManageTool();
     let r = await tool.execute(ctx(home), { action: "timeline", since: "7d", app: "chrome" });
     expect(r.metadata["count"]).toBe(2);
     expect(r.output).toContain("Grafana");
     r = await tool.execute(ctx(home), { action: "status" });
     expect(r.output).toContain("frames:    5");
     expect(r.output).toContain("NOT running");
-    r = await tool.execute(ctx(home), { action: "pause", duration: "1h" });
+    r = await manage.execute(ctx(home), { action: "pause", duration: "1h" });
     expect(isPaused(home)).toBe(true);
     r = await tool.execute(ctx(home), { action: "status" });
     expect(r.output).toContain("PAUSED");
-    await tool.execute(ctx(home), { action: "resume" });
+    await manage.execute(ctx(home), { action: "resume" });
     expect(isPaused(home)).toBe(false);
-    r = await tool.execute(ctx(home), { action: "deny", denyAdd: "Signal" });
+    r = await manage.execute(ctx(home), { action: "deny", denyAdd: "Signal" });
     expect(loadConfig(home).deny_apps).toContain("Signal");
-    await tool.execute(ctx(home), { action: "deny", denyRemove: "Signal" });
+    await manage.execute(ctx(home), { action: "deny", denyRemove: "Signal" });
     expect(loadConfig(home).deny_apps).not.toContain("Signal");
-    r = await tool.execute(ctx(home), { action: "config", intervalSeconds: 15, storageCapMb: 512, retentionDays: 7 });
+    r = await manage.execute(ctx(home), { action: "config", intervalSeconds: 15, storageCapMb: 512, retentionDays: 7 });
     const cfg = loadConfig(home);
     expect([cfg.interval_seconds, cfg.storage_cap_mb, cfg.retention_days]).toEqual([15, 512, 7]);
     expect(r.output).toContain("Updated");
@@ -497,7 +512,7 @@ describe("MemoryTool", () => {
 
   it("delete requires scope and confirm", async () => {
     seeded(home);
-    const tool = new MemoryTool();
+    const tool = new MemoryManageTool();
     let r = await tool.execute(ctx(home), { action: "delete" });
     expect(r.error).toBe(true);
     r = await tool.execute(ctx(home), { action: "delete", app: "chrome" });

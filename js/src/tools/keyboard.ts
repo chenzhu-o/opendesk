@@ -1,8 +1,10 @@
-import { Tool, ToolContext, ToolResult, checkPermission } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 export class KeyboardTool extends Tool {
   name = "keyboard";
+  title = "Keyboard Input";
+  annotations: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
   description = "Simulate keyboard input — type text, press a key, send a hotkey, or hold a key.";
 
   schema = {

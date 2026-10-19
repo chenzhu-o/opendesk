@@ -14,6 +14,11 @@ class AppTool(Tool):
     """Open, close, focus, or list desktop applications."""
 
     name = "app"
+    title = "Open / Close / Focus Apps"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Interact with desktop applications: open an app by name, close it, "
         "bring it to the foreground, or list all currently running windows."

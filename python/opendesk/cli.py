@@ -56,7 +56,7 @@ def _find_mcp_binary() -> str:
 
     raise RuntimeError(
         "opendesk-mcp not found. Make sure you installed with:\n"
-        "  pip install 'opendesk[core,mcp]'"
+        "  pip install opendesk   (or run it with: uvx opendesk mcp)"
     )
 
 
@@ -1133,14 +1133,38 @@ def cmd_fleet(args) -> None:
     sys.exit(1 if result.error else 0)
 
 
+def cmd_mcp(argv: list[str]) -> None:
+    """``opendesk mcp [...]`` — run the MCP server (same flags as ``opendesk-mcp``)."""
+    from opendesk.integrations.mcp import main as mcp_main
+    mcp_main(argv, prog="opendesk mcp")
+
+
 def main() -> None:
     import argparse
 
+    # `opendesk mcp ...` forwards every remaining flag to the MCP server's own
+    # parser (so `uvx opendesk mcp --transport http` works verbatim).
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        cmd_mcp(sys.argv[2:])
+        return
+
     parser = argparse.ArgumentParser(
         prog="opendesk",
-        description="opendesk — Open Desktop Agent",
+        description=(
+            "OpenDesk by VitalOps — open-source computer-use MCP server and SDK "
+            "for macOS, Windows and Linux desktops."
+        ),
     )
     sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser(
+        "mcp",
+        help=(
+            "Run the MCP server (stdio by default; --transport http for streamable "
+            "HTTP). See `opendesk mcp --help`."
+        ),
+        add_help=False,
+    )
 
     install_p = sub.add_parser("install", help="Register opendesk with Claude Code")
     install_p.add_argument(

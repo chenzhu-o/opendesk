@@ -1,8 +1,10 @@
-import { Tool, ToolContext, ToolResult, checkPermission } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 export class MouseTool extends Tool {
   name = "mouse";
+  title = "Mouse Control";
+  annotations: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
   description =
     "Control the mouse — click, double-click, right-click, scroll, drag, move. " +
     "Always prefer the ui tool first. Use mouse only for elements with no accessible label.";
