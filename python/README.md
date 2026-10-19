@@ -1,23 +1,36 @@
-# opendesk — Python SDK
+# OpenDesk — Python SDK and MCP server
 
-Give any AI agent eyes and hands on your desktop.
+**OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.**
 
-**macOS · Linux · Windows**
+**macOS · Linux · Windows** · Not affiliated with the openDesk office suite.
 
 [![PyPI](https://img.shields.io/pypi/v/opendesk)](https://pypi.org/project/opendesk/)
 [![Python](https://img.shields.io/pypi/pyversions/opendesk)](https://pypi.org/project/opendesk/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/vitalops/opendesk/blob/main/LICENSE)
+
+<!-- mcp-name: io.github.vitalops/opendesk -->
 
 ---
 
 ## Install
 
+Run the MCP server with no install step (needs [uv](https://docs.astral.sh/uv/)):
+
 ```bash
-pip install 'opendesk[core,mcp]'
-opendesk install
+claude mcp add opendesk -- uvx --from opendesk opendesk-mcp     # Claude Code
+uvx opendesk mcp                                                # any client, stdio
 ```
 
-`opendesk install` registers the MCP server with Claude Code. For Cursor, Windsurf, Continue, or any other MCP client, see the [MCP integrations](#mcp-integrations) section below.
+Or install the package:
+
+```bash
+pip install opendesk
+opendesk install          # registers the MCP server with Claude Code
+```
+
+`pip install opendesk` includes the MCP server and local computer use (screen capture, mouse, keyboard). For Claude Desktop, Cursor, VS Code and other clients, see [MCP integrations](#mcp-integrations).
+
+**macOS:** run `opendesk check --open` and grant **Accessibility** and **Screen Recording** to the app that runs OpenDesk (Claude Desktop, your terminal for Claude Code, Cursor or VS Code), then restart that app.
 
 ---
 
@@ -48,13 +61,15 @@ asyncio.run(main())
 ## Installation options
 
 ```bash
-pip install opendesk                              # core framework only
-pip install 'opendesk[core,mcp]'                  # + screen capture + MCP server (recommended)
-pip install 'opendesk[core,mcp,learn]'            # + task recording and replay
-pip install 'opendesk[core,mcp,learn,schedule]'   # + scheduled tasks
-pip install 'opendesk[core,mcp,remote]'           # + remote machine control
-pip install 'opendesk[all]'                       # everything
+pip install opendesk                     # MCP server + local computer use
+pip install 'opendesk[learn]'            # + task recording and replay
+pip install 'opendesk[learn,schedule]'   # + scheduled tasks
+pip install 'opendesk[remote]'           # + remote machine control
+pip install 'opendesk[memory]'           # + screen memory (searchable desktop history)
+pip install 'opendesk[all]'              # everything
 ```
+
+The `core` and `mcp` extras from earlier versions still work; they are now part of the base install.
 
 ---
 
@@ -72,26 +87,31 @@ pip install 'opendesk[all]'                       # everything
 | `learn` | Record a workflow once, replay it anytime |
 | `schedule` | Run any task on a timer |
 | `audit` | Show the session audit log in any MCP session |
+| `memory` | Search the local screen memory (read-only) |
+| `memory_manage` | Pause capture, edit the deny list, delete history |
 
-Full reference: [docs/tools.md](../docs/tools.md)
+Over MCP every tool has a `title` and `readOnlyHint` / `destructiveHint` annotations, failures return `isError: true`, and the server sends `instructions` describing the recommended workflow.
+
+Full reference: [tools](https://vitalops.ai/opendesk/docs/tools/index.html)
 
 ---
 
 ## Remote machine control
 
-opendesk supports controlling remote machines over an encrypted WebSocket connection with mDNS peer discovery.
+OpenDesk can control remote machines over an end-to-end encrypted WebSocket connection with mDNS peer discovery.
 
 ```bash
 # On the machine to be controlled:
-pip install 'opendesk[core,mcp,remote]'
+pip install 'opendesk[remote]'
 opendesk pair            # prints a pairing code
+opendesk serve           # after pairing: accept paired controllers
 
 # On the controlling machine:
+pip install 'opendesk[remote]'
 opendesk pair-with <host> <code>
-opendesk serve           # start the server
 ```
 
-See [docs/remote.md](../docs/remote.md) and [docs/protocol.md](../docs/protocol.md) for full details.
+See [remote control](https://vitalops.ai/opendesk/docs/remote/index.html) and the [protocol](https://vitalops.ai/opendesk/docs/protocol/index.html) for full details.
 
 ---
 
@@ -100,27 +120,51 @@ See [docs/remote.md](../docs/remote.md) and [docs/protocol.md](../docs/protocol.
 ### Claude Code
 
 ```bash
+claude mcp add opendesk -- uvx --from opendesk opendesk-mcp
+# or, after pip install:
 opendesk install        # register globally
 opendesk uninstall      # remove
 ```
 
 ### Claude Desktop
 
+Install the one-click `.mcpb` bundle from [GitHub Releases](https://github.com/vitalops/opendesk/releases), or add:
+
 ```json
 {
   "mcpServers": {
-    "opendesk": { "command": "opendesk-mcp" }
+    "opendesk": { "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
   }
 }
 ```
 
-### Cursor / Continue
+### Cursor / Windsurf / Continue
 
 ```json
 {
-  "mcpServers": [{ "name": "opendesk", "command": "opendesk-mcp", "transport": "stdio" }]
+  "mcpServers": {
+    "opendesk": { "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
+  }
 }
 ```
+
+### VS Code (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "opendesk": { "type": "stdio", "command": "uvx", "args": ["--from", "opendesk", "opendesk-mcp"] }
+  }
+}
+```
+
+### Streamable HTTP
+
+```bash
+opendesk mcp --transport http --host 127.0.0.1 --port 8765
+```
+
+Clients connect to `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token comes from `--token`, `$OPENDESK_MCP_TOKEN`, or is generated once into `~/.opendesk/mcp-token` (mode 0600) and printed on start. Binding beyond loopback without auth is refused.
 
 ---
 
@@ -172,20 +216,24 @@ agent = create_react_agent(ChatAnthropic(model="claude-opus-4-6"), tools)
 ## Build from source
 
 ```bash
-cd python
-pip install -e '.[core,mcp]'
+git clone https://github.com/vitalops/opendesk
+cd opendesk/python
+pip install -e '.[all]'
+python -m pytest -q
 ```
 
 ---
 
 ## Docs
 
-- [Quickstart](../docs/quickstart.md)
-- [Tools reference](../docs/tools.md)
-- [Remote control](../docs/remote.md)
-- [Protocol](../docs/protocol.md)
-- [Integrations](../docs/integrations.md)
-- [Architecture](../docs/architecture.md)
+- [Getting started](https://vitalops.ai/opendesk/docs/getting-started/python.html)
+- [Permissions](https://vitalops.ai/opendesk/docs/getting-started/permissions.html)
+- [MCP setup](https://vitalops.ai/opendesk/docs/mcp/index.html)
+- [Tools reference](https://vitalops.ai/opendesk/docs/tools/index.html)
+- [Remote control](https://vitalops.ai/opendesk/docs/remote/index.html)
+- [Protocol](https://vitalops.ai/opendesk/docs/protocol/index.html)
+- [Integrations](https://vitalops.ai/opendesk/docs/integrations/index.html)
+- [Architecture](https://vitalops.ai/opendesk/docs/architecture/index.html)
 
 ## License
 

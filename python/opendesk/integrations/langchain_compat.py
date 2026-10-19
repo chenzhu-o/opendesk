@@ -28,6 +28,7 @@ import asyncio
 from typing import Any, Type
 
 from opendesk.registry import ToolRegistry, create_registry
+from opendesk.safety.guard import run_tool
 from opendesk.tools.base import ToolContext, allow_all_context
 
 
@@ -79,11 +80,11 @@ def _wrap_tool(tool: Any, ctx: ToolContext) -> Any:
         description: str = tool_description
 
         def _run(self, **kwargs: Any) -> str:
-            result = asyncio.run(tool.execute(ctx, tool.parse_params(kwargs)))
+            result = asyncio.run(run_tool(tool, ctx, kwargs))
             return _format_result(result)
 
         async def _arun(self, **kwargs: Any) -> str:
-            result = await tool.execute(ctx, tool.parse_params(kwargs))
+            result = await run_tool(tool, ctx, kwargs)
             return _format_result(result)
 
         @property

@@ -20,6 +20,8 @@ class OCRTool(Tool):
     """Extract text from the screen or a screen region using OCR."""
 
     name = "ocr"
+    title = "Read Screen Text (OCR)"
+    annotations = {"readOnlyHint": True, "openWorldHint": False}
     description = (
         "Capture a screen region and extract all visible text using OCR. "
         "Useful for reading text in images, PDFs rendered to screen, or legacy apps. "

@@ -1,0 +1,17 @@
+{
+  "name": "opendesk",
+  "displayName": "OpenDesk",
+  "version": "0.3.0",
+  "description": "OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.",
+  "author": {
+    "name": "VitalOps",
+    "url": "https://github.com/vitalops"
+  },
+  "homepage": "https://github.com/vitalops/opendesk",
+  "repository": "https://github.com/vitalops/opendesk",
+  "license": "MIT",
+  "keywords": ["computer-use", "desktop-automation", "mcp", "accessibility", "screenshot", "ocr", "screen-memory", "remote-desktop"],
+  "documentationUrl": "https://vitalops.ai/opendesk/docs/",
+  "supportUrl": "https://github.com/vitalops/opendesk/issues",
+  "privacyPolicyUrl": "https://github.com/vitalops/opendesk/blob/main/PRIVACY.md"
+}

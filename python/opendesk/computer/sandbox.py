@@ -46,6 +46,9 @@ class ActionType(str, Enum):
     CLIPBOARD_WRITE = "clipboard_write"
     OCR = "ocr"
     UI_ACTION = "ui_action"
+    SCRIPT = "script"
+    BROWSER = "browser"
+    FLEET = "fleet"
 
 
 @dataclass

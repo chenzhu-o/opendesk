@@ -1,0 +1,19 @@
+# Applied to the staging directory that scripts/build_mcpb.sh assembles
+# (manifest.json, pyproject.toml, README.md, LICENSE, PRIVACY.md, icon.png,
+# opendesk/).  The `uv` server type installs dependencies on the user's
+# machine, so no virtualenv or site-packages may be bundled.
+.venv/
+venv/
+server/lib/
+server/venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store
+*.mcpb

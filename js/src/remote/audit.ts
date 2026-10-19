@@ -5,12 +5,17 @@
  * File permissions: 0600. Directory: 0700.
  *
  * Event types: session.opened, session.closed, session.rejected, call
+ *
+ * Entries are hash-chained (`prev` / `hash`, see ../safety/chain.ts) so
+ * `opendesk-js audit verify` detects edited, deleted or inserted lines.
+ * Older unchained lines at the top of a file are still accepted.
  */
 
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { fingerprint } from "../protocol/auth/identity.js";
+import { lastHash, seal } from "../safety/chain.js";
 
 export interface AuditEntry {
   ts: number;               // Unix seconds (float)
@@ -26,10 +31,14 @@ export interface AuditEntry {
   duration_ms?: number;     // call duration
   duration?: number;        // session duration in seconds
   reason?: string;
+  prev?: string;
+  hash?: string;
 }
 
 export class AuditLog {
   readonly directory: string;
+  private chainFile?: string;
+  private chainHead = "";
 
   constructor(opts: { home?: string } = {}) {
     const base = opts.home ?? path.join(os.homedir(), ".opendesk");
@@ -47,11 +56,18 @@ export class AuditLog {
   private write(entry: AuditEntry): void {
     try {
       fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+      const file = this.filePath();
+      if (this.chainFile !== file) {
+        this.chainFile = file;
+        this.chainHead = lastHash(file);
+      }
+      const sealed = seal(entry as unknown as Record<string, unknown>, this.chainHead);
       fs.appendFileSync(
-        this.filePath(),
-        JSON.stringify(entry) + "\n",
+        file,
+        JSON.stringify(sealed) + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
+      this.chainHead = sealed.hash;
     } catch { /* audit failures must never crash the server */ }
   }
 

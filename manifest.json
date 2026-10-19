@@ -1,0 +1,149 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "opendesk",
+  "display_name": "OpenDesk",
+  "version": "0.3.0",
+  "description": "OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.",
+  "long_description": "OpenDesk is an open-source computer-use framework from VitalOps (not the openDesk office suite). It gives Claude and other AI agents eyes and hands on a real desktop: screenshots with a Set-of-Marks overlay, accessibility-based UI actions (click buttons by name, no coordinates), mouse and keyboard control, app management, clipboard, OCR, workflow recording and replay, scheduled tasks, a full audit log, and a local, searchable screen memory. Paired remote machines can be driven over an end-to-end encrypted connection. Everything runs locally; nothing is uploaded.\n\nOn macOS, grant Accessibility and Screen Recording to Claude Desktop (System Settings → Privacy & Security), then restart it.",
+  "author": {
+    "name": "VitalOps",
+    "url": "https://github.com/vitalops"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/vitalops/opendesk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vitalops/opendesk"
+  },
+  "documentation": "https://vitalops.ai/opendesk/docs/",
+  "support": "https://github.com/vitalops/opendesk/issues",
+  "icon": "icon.png",
+  "keywords": [
+    "computer-use",
+    "desktop-automation",
+    "accessibility",
+    "screenshot",
+    "ui-testing",
+    "mouse",
+    "keyboard",
+    "ocr",
+    "workflow",
+    "remote-desktop",
+    "screen-memory",
+    "recall",
+    "desktop-history"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "opendesk/integrations/mcp.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "opendesk-mcp"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "screenshot",
+      "description": "Capture the screen or a region, optionally with numbered Set-of-Marks boxes over interactive elements. Read-only."
+    },
+    {
+      "name": "ui",
+      "description": "Act on UI elements by name through the accessibility API: inspect the tree, click, type, use menus, read values. No coordinates needed."
+    },
+    {
+      "name": "mouse",
+      "description": "Move, click, double-click, right-click, scroll or drag, with Retina-aware scaling from screenshot coordinates."
+    },
+    {
+      "name": "keyboard",
+      "description": "Type text (full Unicode), press keys, send hotkeys or hold a key."
+    },
+    {
+      "name": "app",
+      "description": "Open, close, focus or list desktop applications."
+    },
+    {
+      "name": "clipboard",
+      "description": "Read or write the clipboard text."
+    },
+    {
+      "name": "ocr",
+      "description": "Extract visible text from the screen or a region. Read-only."
+    },
+    {
+      "name": "learn",
+      "description": "Record a desktop workflow once and replay it later."
+    },
+    {
+      "name": "schedule",
+      "description": "Run a task or learned workflow on a timer."
+    },
+    {
+      "name": "audit",
+      "description": "Show the session audit log and replay recorded sessions."
+    },
+    {
+      "name": "memory",
+      "description": "Search the local screen memory: what was on screen, when, in which app. Read-only; nothing leaves the machine."
+    },
+    {
+      "name": "memory_manage",
+      "description": "Pause or resume screen-memory capture, edit the per-app deny list, change storage settings or delete history."
+    },
+    {
+      "name": "script",
+      "description": "Run a script or API call when the task needs no visual interaction."
+    },
+    {
+      "name": "browser",
+      "description": "Drive a web browser through its automation interface."
+    },
+    {
+      "name": "fleet",
+      "description": "Run a task across several paired machines."
+    },
+    {
+      "name": "opendesk_peers",
+      "description": "List this machine and the paired remote peers."
+    },
+    {
+      "name": "opendesk_discover",
+      "description": "Find OpenDesk peers on the local network (mDNS)."
+    },
+    {
+      "name": "opendesk_use",
+      "description": "Set the default machine for subsequent computer-use calls."
+    },
+    {
+      "name": "opendesk_status",
+      "description": "Show the current default peer and open connections."
+    },
+    {
+      "name": "opendesk_describe",
+      "description": "Show what a paired peer is for and what it has access to."
+    },
+    {
+      "name": "opendesk_capabilities",
+      "description": "Show what a peer's backend can do."
+    },
+    {
+      "name": "opendesk_disconnect",
+      "description": "Close a cached remote connection (the peer stays paired)."
+    }
+  ],
+  "privacy_policies": [
+    "https://github.com/vitalops/opendesk/blob/main/PRIVACY.md"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

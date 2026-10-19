@@ -6,6 +6,7 @@ import { Dispatcher } from "../protocol/peer.js";
 import { ToolRegistry, createRegistry } from "../registry.js";
 import { ToolContext, allowAllContext, PermissionDeniedError } from "../tools/base.js";
 import type { AuditLog } from "../remote/audit.js";
+import { runTool } from "../safety/guard.js";
 
 function summarizeCall(toolName: string, params: Record<string, unknown>): string {
   const keys = Object.keys(params).filter((k) => k !== "image" && k !== "content").slice(0, 2);
@@ -21,6 +22,8 @@ export interface DispatcherOpts {
   peerName?: string;
   peerFingerprint?: string;
   sessionId?: string;
+  /** opendesk home for the safety guard (policy.json / control.json / audit). */
+  home?: string;
 }
 
 export class ToolDispatcher implements Dispatcher {
@@ -30,6 +33,7 @@ export class ToolDispatcher implements Dispatcher {
   private peerName: string;
   private peerFingerprint: string;
   private sessionId: string;
+  private home?: string;
 
   constructor(opts: DispatcherOpts = {}) {
     this.registry = opts.registry ?? createRegistry();
@@ -38,6 +42,7 @@ export class ToolDispatcher implements Dispatcher {
     this.peerName = opts.peerName ?? "unknown";
     this.peerFingerprint = opts.peerFingerprint ?? "?";
     this.sessionId = opts.sessionId ?? "?";
+    this.home = opts.home;
   }
 
   async call(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
@@ -57,8 +62,13 @@ export class ToolDispatcher implements Dispatcher {
     let errorCode: string | undefined;
 
     try {
-      const result = await tool.execute(this.ctx, params);
-      if (result.error) outcome = "error";
+      // Safety guard on the controlled machine: control.json kill switch,
+      // policy.json rules (peer = controller name), approvals, chained audit.
+      const result = await runTool(tool, this.ctx, params, { peer: this.peerName, home: this.home });
+      if (result.error) {
+        const d = (result.metadata?.["safety"] as { decision?: string } | undefined)?.decision;
+        outcome = d === "block" || d === "denied" || d === "refused" ? "denied" : "error";
+      }
       this.audit?.recordCall({
         peerName: this.peerName,
         peerFingerprint: this.peerFingerprint,

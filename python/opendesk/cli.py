@@ -56,7 +56,7 @@ def _find_mcp_binary() -> str:
 
     raise RuntimeError(
         "opendesk-mcp not found. Make sure you installed with:\n"
-        "  pip install 'opendesk[core,mcp]'"
+        "  pip install opendesk   (or run it with: uvx opendesk mcp)"
     )
 
 
@@ -251,8 +251,11 @@ def cmd_serve(args) -> None:
                 file=sys.stderr,
             )
 
-        from opendesk.remote.policy import AllowAllPolicy, ConsolePolicy
-        policy = AllowAllPolicy() if args.approve == "auto" else ConsolePolicy()
+        from opendesk.remote.policy import AllowAllPolicy, ConsolePolicy, RulePolicy
+        if args.approve == "policy":
+            policy = RulePolicy(home)
+        else:
+            policy = AllowAllPolicy() if args.approve == "auto" else ConsolePolicy()
 
         server = OpendeskServer(
             LocalComputer(), identity, trusted,
@@ -363,6 +366,10 @@ def cmd_check(args) -> None:
 
 def cmd_audit(args) -> None:
     """Print server-side audit log entries (or follow them live)."""
+    if getattr(args, "audit_cmd", None) == "verify":
+        from opendesk.safety.cli import cmd_audit_verify
+        cmd_audit_verify(args)
+        return
     try:
         from opendesk.remote.audit import AuditLog
     except ImportError as exc:
@@ -864,14 +871,386 @@ def cmd_scheduler(args) -> None:
         print("Usage: opendesk scheduler start|list")
 
 
+# ---------------------------------------------------------------------------
+# Screen memory — searchable desktop history
+# ---------------------------------------------------------------------------
+
+
+def cmd_memory(args) -> None:
+    """``opendesk memory <start|status|pause|resume|search|timeline|show|deny|config|reindex|clear|install-service|uninstall-service>``."""
+    home = Path(args.home).expanduser() if getattr(args, "home", None) else None
+    sub = args.memory_cmd or "status"
+
+    if sub == "start":
+        from opendesk.memory.recorder import start_daemon
+        from opendesk.wsl import print_advisory_if_wsl
+        _configure_logging(getattr(args, "log_file", None))
+        print_advisory_if_wsl()
+        start_daemon(home, interval=args.interval)
+        return
+
+    if sub == "status":
+        _memory_status(home)
+        return
+
+    if sub == "pause":
+        from opendesk.memory.config import parse_duration, set_pause
+        secs = None
+        if args.duration:
+            try:
+                secs = parse_duration(args.duration)
+            except ValueError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                sys.exit(2)
+        state = set_pause(home, duration_seconds=secs, reason="cli")
+        print(f"Screen memory {state.describe()}.")
+        return
+
+    if sub == "resume":
+        from opendesk.memory.config import clear_pause
+        print("Screen memory resumed." if clear_pause(home) else "Screen memory was not paused.")
+        return
+
+    if sub in ("search", "timeline", "show"):
+        _memory_query(home, sub, args)
+        return
+
+    if sub == "deny":
+        from opendesk.memory.config import load_config, save_config
+        cfg = load_config(home)
+        action = args.deny_cmd or "list"
+        if action == "add":
+            print(f"Added {args.pattern!r}." if cfg.deny_add(args.pattern) else f"{args.pattern!r} already listed.")
+            save_config(cfg, home)
+        elif action == "remove":
+            print(f"Removed {args.pattern!r}." if cfg.deny_remove(args.pattern) else f"{args.pattern!r} not found.")
+            save_config(cfg, home)
+        print("Deny list (never captured):")
+        for d in cfg.deny_apps:
+            print(f"  - {d}")
+        if not cfg.deny_apps:
+            print("  (empty)")
+        return
+
+    if sub == "config":
+        from opendesk.memory.config import load_config, save_config
+        cfg = load_config(home)
+        changed = False
+        if args.interval is not None:
+            cfg.interval_seconds = float(args.interval); changed = True
+        if args.cap is not None:
+            cfg.storage_cap_mb = int(args.cap); changed = True
+        if args.retention is not None:
+            cfg.retention_days = int(args.retention); changed = True
+        if args.hotkey is not None:
+            cfg.pause_hotkey = args.hotkey; changed = True
+        if args.trigger is not None:
+            cfg.trigger = args.trigger; changed = True
+        if args.poll is not None:
+            cfg.poll_seconds = float(args.poll); changed = True
+        if args.min_interval is not None:
+            cfg.min_interval_seconds = float(args.min_interval); changed = True
+        if args.redact is not None:
+            cfg.redact = args.redact == "on"; changed = True
+        before_enc = (cfg.encrypt_text, cfg.encrypt_thumbnails)
+        if args.encrypt_text is not None:
+            cfg.encrypt_text = args.encrypt_text == "on"; changed = True
+        if args.encrypt_thumbnails is not None:
+            cfg.encrypt_thumbnails = args.encrypt_thumbnails == "on"; changed = True
+        if changed:
+            cfg.normalize()
+            path = save_config(cfg, home)
+            print(f"Saved {path}")
+            if (cfg.encrypt_text, cfg.encrypt_thumbnails) != before_enc:
+                print("  New frames use the new setting; run `opendesk memory reindex` to convert existing ones.")
+        for k, v in cfg.to_dict().items():
+            print(f"  {k}: {v}")
+        return
+
+    if sub == "reindex":
+        from opendesk.memory.config import load_config
+        from opendesk.memory.store import MemoryStore
+        cfg = load_config(home)
+        with MemoryStore(home, config=cfg) as store:
+            n = store.stats().frames
+            what = [
+                f"text → {'encrypted' if cfg.encrypt_text else 'plaintext'}",
+                f"thumbnails → {'encrypted' if cfg.encrypt_thumbnails else 'plaintext'}",
+            ]
+            if cfg.redact:
+                what.append("redact secrets in old text")
+            if not args.yes:
+                answer = input(f"Rewrite {n} frame(s) ({'; '.join(what)})? [y/N] ")
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Cancelled.")
+                    return
+
+            def _progress(done: int, total: int) -> None:
+                print(f"\r  {done}/{total}", end="", flush=True)
+
+            counts = store.reindex(redact=cfg.redact, progress=_progress if n > 200 else None)
+        if n > 200:
+            print()
+        print(
+            "Reindexed {frames} frame(s): text encrypted {text_encrypted}, decrypted {text_decrypted}; "
+            "thumbnails encrypted {thumbs_encrypted}, decrypted {thumbs_decrypted}; "
+            "redacted {redacted}; failed {failed}.".format(**counts)
+        )
+        if counts["failed"]:
+            print("  Failed frames could not be decrypted (memory key missing or replaced) and were left as-is.")
+        return
+
+    if sub == "clear":
+        from opendesk.memory.store import MemoryStore
+        from opendesk.memory.timeparse import fmt_range, parse_range
+        with MemoryStore(home) as store:
+            if args.before or args.app:
+                start, end = parse_range(None, args.before) if args.before else (0.0, None)
+                frames = store.timeline(start=start, end=end, app=args.app, limit=10_000_000)
+                ids = [f.id for f in frames]
+                scope = fmt_range(start, end) + (f", app~{args.app!r}" if args.app else "")
+            else:
+                ids = None
+                scope = "ALL frames"
+            n = len(ids) if ids is not None else store.stats().frames
+            if not args.yes:
+                answer = input(f"Delete {n} frame(s) ({scope})? [y/N] ")
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Cancelled.")
+                    return
+            deleted = store.delete(ids) if ids is not None else store.clear()
+        print(f"Deleted {deleted} frame(s).")
+        return
+
+    if sub == "install-service":
+        from opendesk.memory.service import install_memory_service
+        try:
+            result = install_memory_service(
+                home=home, interval=args.interval, autostart=not args.no_start,
+            )
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✓ Screen-memory service installed ({result.manager}): {result.path}")
+        if result.started:
+            print("  Started.  It will also run automatically on next login.")
+        elif args.no_start:
+            print("  Not started (--no-start).")
+        else:
+            print("  WARNING: file written but the service manager could not start it.")
+        return
+
+    if sub == "uninstall-service":
+        from opendesk.memory.service import uninstall_memory_service
+        try:
+            removed = uninstall_memory_service()
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print("✓ Screen-memory service removed." if removed else "No screen-memory service was installed.")
+        return
+
+    print("Usage: opendesk memory start|status|pause|resume|search|timeline|show|deny|config|reindex|clear")
+
+
+def _memory_status(home) -> None:
+    from opendesk.memory.config import daemon_alive, get_pause, load_config, read_daemon_state
+    from opendesk.memory.store import MemoryStore
+    from opendesk.memory.timeparse import fmt_ts
+
+    cfg = load_config(home)
+    pause = get_pause(home)
+    alive = daemon_alive(home)
+    state = read_daemon_state(home) or {}
+    with MemoryStore(home) as store:
+        st = store.stats()
+        store_dir = store.dir
+        fts = store.has_fts
+    mb = lambda n: f"{n / (1024 * 1024):.1f}"  # noqa: E731
+    print("opendesk screen memory")
+    if alive:
+        print(f"  daemon:    running (pid {state.get('pid')}, last tick: {state.get('status', '?')})")
+    else:
+        print("  daemon:    not running — `opendesk memory start`")
+    print(f"  capture:   {'PAUSED — ' + pause.describe() if pause else 'active'}")
+    print(f"  store:     {store_dir}")
+    span = f"  ({fmt_ts(st.oldest)} → {fmt_ts(st.newest)})" if st.frames and st.oldest and st.newest else ""
+    print(f"  frames:    {st.frames}{span}")
+    print(f"  size:      {mb(st.total_bytes)} MB of {cfg.storage_cap_mb} MB cap")
+    if cfg.trigger == "interval":
+        trig = f"interval — every {cfg.interval_seconds:g}s"
+    else:
+        trig = (f"events — on app/window change (poll {cfg.poll_seconds:g}s, "
+                f"≥{cfg.min_interval_seconds:g}s apart), idle fallback {cfg.interval_seconds:g}s")
+    print(f"  trigger:   {trig}")
+    print(f"  retention: {cfg.retention_days} days")
+    if st.text_sources:
+        print("  text:      " + ", ".join(f"{k} ×{v}" for k, v in sorted(st.text_sources.items()))
+              + f"   redaction {'on' if cfg.redact else 'off'}")
+    enc_bits = [
+        f"thumbnails {'on' if cfg.encrypt_thumbnails else 'off'} ({st.encrypted_thumbnails}/{st.thumbnails} stored encrypted)",
+        f"text {'on' if cfg.encrypt_text else 'off'} ({st.encrypted_text_frames}/{st.frames})",
+    ]
+    key = st.key_store or "not created yet"
+    print(f"  encrypt:   {'; '.join(enc_bits)}; key: {key}")
+    if not st.encryption_available:
+        print("             WARNING: 'cryptography' not installed — new frames are stored unencrypted")
+    if state.get("redactions"):
+        print(f"  redacted:  {state.get('redactions')} secret(s) this daemon run")
+    print(f"  deny list: {', '.join(cfg.deny_apps) or '(empty)'}")
+    print(f"  hotkey:    {cfg.pause_hotkey or '(disabled)'}")
+    print(f"  search:    {'FTS5' if fts else 'LIKE fallback'}")
+    if st.apps:
+        print("  top apps:  " + ", ".join(f"{a or '(unknown)'} ×{n}" for a, n in st.apps[:6]))
+
+
+def _memory_query(home, sub: str, args) -> None:
+    from opendesk.memory.store import MemoryStore
+    from opendesk.memory.timeparse import fmt_range, parse_range
+
+    try:
+        start, end = parse_range(getattr(args, "since", None), getattr(args, "until", None))
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    with MemoryStore(home) as store:
+        if sub == "show":
+            frame = store.get(args.id)
+            if frame is None:
+                print(f"No frame with id {args.id}.", file=sys.stderr)
+                sys.exit(1)
+            print(f"#{frame.id}  {frame.when}  [{frame.app or '(unknown)'}]  {frame.title}")
+            src = frame.text_source or "?"
+            print(f"text:      {src}{' (encrypted at rest)' if frame.encrypted else ''}")
+            if frame.thumb_path:
+                encrypted = frame.thumb_path.endswith(".enc")
+                save = getattr(args, "save", None)
+                if save:
+                    data = store.thumbnail(frame)
+                    if data is None:
+                        print("thumbnail: could not be read (missing, or the memory key is unavailable)",
+                              file=sys.stderr)
+                    else:
+                        Path(save).expanduser().write_bytes(data)
+                        print(f"thumbnail: saved {len(data)} bytes to {save}")
+                elif encrypted:
+                    print(f"thumbnail: {store.dir / frame.thumb_path} (encrypted — use --save out.jpg)")
+                else:
+                    print(f"thumbnail: {store.dir / frame.thumb_path}")
+            print()
+            if frame.encrypted and not frame.text:
+                print("(encrypted text — memory key unavailable)")
+            else:
+                print(frame.text or "(no text)")
+            return
+        if sub == "search":
+            frames = store.search(args.query, start=start, end=end, app=args.app, limit=args.limit)
+        else:
+            frames = store.timeline(start=start, end=end, app=args.app, limit=args.limit)
+
+    label = f"{sub} {args.query!r}" if sub == "search" else "timeline"
+    print(f"{label} — {fmt_range(start, end)}" + (f" — app~{args.app!r}" if args.app else ""))
+    if not frames:
+        print("(no results)")
+        return
+    for f in frames:
+        title = f"  {f.title[:60]}" if f.title and f.title != f.app else ""
+        print(f"#{f.id:<6} {f.when}  [{f.app or '(unknown)'}]{title}")
+        if sub == "search":
+            snip = (f.snippet or f.text[:120]).replace("\n", " ").strip()
+            if snip:
+                print(f"        {snip[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# Fleet — one tool call across many peers
+# ---------------------------------------------------------------------------
+
+
+def cmd_fleet(args) -> None:
+    """``opendesk fleet run --peers a,b|all --tool screenshot --params '{}'``."""
+    if args.fleet_cmd != "run":
+        print("Usage: opendesk fleet run --peers a,b|all --tool <tool> [--params JSON]")
+        sys.exit(2)
+    import json
+    try:
+        inner_params = json.loads(args.params or "{}")
+        if not isinstance(inner_params, dict):
+            raise ValueError("must be a JSON object")
+    except ValueError as exc:
+        print(f"ERROR: --params: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    from opendesk.integrations.mcp_session import MCPSession
+    from opendesk.registry import create_registry
+    from opendesk.tools.base import ToolContext
+    from opendesk.tools.fleet import FleetTool
+
+    home = Path(args.home).expanduser() if args.home else None
+
+    async def _run():
+        session = MCPSession(home=home)
+        registry = create_registry()
+        tool = FleetTool(session=session, registry=registry)
+        try:
+            params = tool.parse_params({
+                "peers": args.peers, "tool": args.tool, "params": inner_params,
+                "match": args.match, "concurrency": args.concurrency,
+                "timeout": args.timeout, "include_images": bool(args.save_images),
+            })
+            return await tool.execute(ToolContext(session_id="cli-fleet", computer=session.local), params)
+        finally:
+            await session.aclose()
+
+    try:
+        result = asyncio.run(_run())
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(result.output)
+    if args.save_images and result.attachments:
+        out_dir = Path(args.save_images).expanduser()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for att in result.attachments:
+            dest = out_dir / att.filename
+            dest.write_bytes(att.content)
+            print(f"saved {dest}")
+    sys.exit(1 if result.error else 0)
+
+
+def cmd_mcp(argv: list[str]) -> None:
+    """``opendesk mcp [...]`` — run the MCP server (same flags as ``opendesk-mcp``)."""
+    from opendesk.integrations.mcp import main as mcp_main
+    mcp_main(argv, prog="opendesk mcp")
+
+
 def main() -> None:
     import argparse
 
+    # `opendesk mcp ...` forwards every remaining flag to the MCP server's own
+    # parser (so `uvx opendesk mcp --transport http` works verbatim).
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        cmd_mcp(sys.argv[2:])
+        return
+
     parser = argparse.ArgumentParser(
         prog="opendesk",
-        description="opendesk — Open Desktop Agent",
+        description=(
+            "OpenDesk by VitalOps — open-source computer-use MCP server and SDK "
+            "for macOS, Windows and Linux desktops."
+        ),
     )
     sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser(
+        "mcp",
+        help=(
+            "Run the MCP server (stdio by default; --transport http for streamable "
+            "HTTP). See `opendesk mcp --help`."
+        ),
+        add_help=False,
+    )
 
     install_p = sub.add_parser("install", help="Register opendesk with Claude Code")
     install_p.add_argument(
@@ -922,14 +1301,15 @@ def main() -> None:
     serve_p.add_argument("--no-mdns", action="store_true")
     serve_p.add_argument(
         "--approve",
-        choices=["auto", "console"],
+        choices=["auto", "console", "policy"],
         default="auto",
         help=(
             "How to gate inbound calls.  auto = allow everything (default, "
             "safe for paired single-user setups).  console = prompt on stdin "
             "for non-observation methods (input, fs.write, process.shell, "
             "etc.).  Console mode requires a TTY; under systemd/launchd "
-            "gated calls are denied."
+            "gated calls are denied.  policy = apply policy.json rules and "
+            "the `opendesk stop` / `takeover` kill switch (see docs/safety.md)."
         ),
     )
     serve_p.add_argument(
@@ -1030,7 +1410,11 @@ def main() -> None:
 
     aud_p = sub.add_parser(
         "audit",
-        help="Print the server-side audit log (controlled machine)",
+        help="Print the server-side audit log (controlled machine); `audit verify` checks hash chains",
+    )
+    aud_p.add_argument(
+        "audit_cmd", nargs="?", choices=["verify"], default=None,
+        help="verify = check the tamper-evident hash chains (all days, or --date)",
     )
     aud_p.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     aud_p.add_argument("--peer", default=None, help="Filter by peer name or fingerprint substring")
@@ -1116,7 +1500,129 @@ def main() -> None:
     pdesc_p.add_argument("--clear", action="store_true", help="Remove the override.")
     pdesc_p.add_argument("--home", default=None)
 
+    # --- Screen memory -------------------------------------------------
+
+    mem_p = sub.add_parser(
+        "memory",
+        help=(
+            "Screen memory: a local, searchable history of what was on screen. "
+            "Captures on app/window change, reads accessibility text or OCR, redacts and encrypts, indexed on this machine only."
+        ),
+    )
+    mem_p.add_argument("--home", default=None, help="opendesk home (default ~/.opendesk)")
+    mem_sub = mem_p.add_subparsers(dest="memory_cmd")
+
+    ms = mem_sub.add_parser("start", help="Run the capture daemon in the foreground (Ctrl-C to stop)")
+    ms.add_argument("--interval", type=float, default=None, help="Seconds between captures (overrides config)")
+    ms.add_argument("--log-file", default=None, help="Also write logs to this rotating file")
+    ms.add_argument("--home", default=None)
+
+    mst = mem_sub.add_parser("status", help="Daemon state, storage usage, config")
+    mst.add_argument("--home", default=None)
+
+    mp = mem_sub.add_parser("pause", help="Pause capture (optionally for a duration)")
+    mp.add_argument("duration", nargs="?", default=None, help="e.g. 30m, 2h (omit = until resumed)")
+    mp.add_argument("--home", default=None)
+
+    mr = mem_sub.add_parser("resume", help="Resume capture")
+    mr.add_argument("--home", default=None)
+
+    mq = mem_sub.add_parser("search", help="Full-text search the history")
+    mq.add_argument("query")
+    mq.add_argument("--since", default=None, help="'2h', 'yesterday', 'tuesday', 'last week', ISO date")
+    mq.add_argument("--until", default=None)
+    mq.add_argument("--app", default=None, help="Filter by app name / window title substring")
+    mq.add_argument("--limit", type=int, default=20)
+    mq.add_argument("--home", default=None)
+
+    mt = mem_sub.add_parser("timeline", help="List captured moments in a period")
+    mt.add_argument("--since", default=None)
+    mt.add_argument("--until", default=None)
+    mt.add_argument("--app", default=None)
+    mt.add_argument("--limit", type=int, default=50)
+    mt.add_argument("--home", default=None)
+
+    msh = mem_sub.add_parser("show", help="Print one moment's full text and thumbnail path")
+    msh.add_argument("id", type=int)
+    msh.add_argument("--save", default=None, metavar="FILE",
+                     help="Write the (decrypted) JPEG thumbnail to FILE")
+    msh.add_argument("--home", default=None)
+
+    md = mem_sub.add_parser("deny", help="Manage the per-app deny list")
+    md.add_argument("--home", default=None)
+    md_sub = md.add_subparsers(dest="deny_cmd")
+    md_sub.add_parser("list", help="Show the deny list (default)").add_argument("--home", default=None)
+    mda = md_sub.add_parser("add", help="Never capture apps/titles containing this")
+    mda.add_argument("pattern")
+    mda.add_argument("--home", default=None)
+    mdr = md_sub.add_parser("remove", help="Remove an entry")
+    mdr.add_argument("pattern")
+    mdr.add_argument("--home", default=None)
+
+    mc = mem_sub.add_parser(
+        "config",
+        help="Show / change trigger, intervals, storage cap, retention, hotkey, redaction, encryption",
+    )
+    mc.add_argument("--trigger", choices=["events", "interval"], default=None,
+                    help="events = capture on app/window change (default); interval = fixed timer")
+    mc.add_argument("--interval", type=float, default=None,
+                    help="Seconds between captures (interval mode) / idle fallback (events mode)")
+    mc.add_argument("--poll", type=float, default=None, help="Events mode: seconds between frontmost-window probes")
+    mc.add_argument("--min-interval", type=float, default=None, dest="min_interval",
+                    help="Events mode: minimum seconds between captures")
+    mc.add_argument("--cap", type=int, default=None, help="Storage cap in MB (oldest frames deleted first)")
+    mc.add_argument("--retention", type=int, default=None, help="Days to keep frames")
+    mc.add_argument("--hotkey", default=None, help="Pause hotkey, pynput syntax, e.g. '<cmd>+<shift>+<alt>+p'; '' disables")
+    mc.add_argument("--redact", choices=["on", "off"], default=None,
+                    help="Scrub card numbers, API keys, tokens, passwords before storing text")
+    mc.add_argument("--encrypt-text", choices=["on", "off"], default=None, dest="encrypt_text",
+                    help="Encrypt stored text (exact-word search only); run `reindex` to convert old frames")
+    mc.add_argument("--encrypt-thumbnails", choices=["on", "off"], default=None, dest="encrypt_thumbnails",
+                    help="Encrypt stored thumbnails (default on)")
+    mc.add_argument("--home", default=None)
+
+    mri = mem_sub.add_parser(
+        "reindex",
+        help="Rewrite existing frames under the current settings (encrypt/decrypt text & thumbnails, redact)",
+    )
+    mri.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+    mri.add_argument("--home", default=None)
+
+    mcl = mem_sub.add_parser("clear", help="Delete stored frames (all, or --before / --app)")
+    mcl.add_argument("--before", default=None, help="Only frames before this time phrase, e.g. '7d', '2026-08-01'")
+    mcl.add_argument("--app", default=None, help="Only frames from this app / title substring")
+    mcl.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+    mcl.add_argument("--home", default=None)
+
+    mis = mem_sub.add_parser("install-service", help="Run the daemon at login (launchd / systemd / Task Scheduler)")
+    mis.add_argument("--interval", type=float, default=None)
+    mis.add_argument("--no-start", action="store_true")
+    mis.add_argument("--home", default=None)
+
+    mus = mem_sub.add_parser("uninstall-service", help="Remove the login service")
+    mus.add_argument("--home", default=None)
+
+    from opendesk.eval.cli import add_eval_parser, cmd_eval
+    add_eval_parser(sub)
+    fleet_p = sub.add_parser("fleet", help="Run one tool call across several paired peers")
+    fleet_sub = fleet_p.add_subparsers(dest="fleet_cmd")
+    fr = fleet_sub.add_parser("run", help="Run a tool on peers in parallel")
+    fr.add_argument("--peers", required=True, help="Comma-separated peer names, or 'all'")
+    fr.add_argument("--tool", required=True, help="Tool to run, e.g. script, screenshot, app")
+    fr.add_argument("--params", default="{}", help="Tool arguments as a JSON object")
+    fr.add_argument("--match", default=None, help="Only peers whose description contains these words")
+    fr.add_argument("--concurrency", type=int, default=4)
+    fr.add_argument("--timeout", type=float, default=120.0, help="Seconds per peer")
+    fr.add_argument("--save-images", default=None, help="Directory to write image results to")
+    fr.add_argument("--home", default=None)
+    # --- Safety: stop / resume / takeover / handback / secrets / policy --
+    from opendesk.safety import cli as safety_cli
+    safety_cli.register(sub)
+
     args = parser.parse_args()
+
+    if safety_cli.dispatch(args):
+        return
 
     if args.command == "install":
         cmd_install(scope=args.scope)
@@ -1124,6 +1630,12 @@ def main() -> None:
         cmd_uninstall()
     elif args.command == "scheduler":
         cmd_scheduler(args)
+    elif args.command == "memory":
+        cmd_memory(args)
+    elif args.command == "eval":
+        cmd_eval(args)
+    elif args.command == "fleet":
+        cmd_fleet(args)
     elif args.command == "pair":
         cmd_pair(args)
     elif args.command == "pair-with":

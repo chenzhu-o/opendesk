@@ -4,6 +4,7 @@
 
 # JavaScript / Node.js
 js/node_modules/
+js/node_modules
 js/dist/
 js/*.tgz
 js/package-lock.json
@@ -226,3 +227,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MCP Bundle build outputs (scripts/build_mcpb.sh)
+*.mcpb

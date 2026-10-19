@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vitalops/opendesk",
+  "title": "OpenDesk (VitalOps)",
+  "description": "Computer use for AI agents: see and control macOS, Windows and Linux desktops. By VitalOps.",
+  "version": "0.3.0",
+  "websiteUrl": "https://vitalops.ai/opendesk/docs/",
+  "repository": {
+    "url": "https://github.com/vitalops/opendesk",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "opendesk",
+      "version": "0.3.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    },
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@vitalops/opendesk-sdk",
+      "version": "0.3.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

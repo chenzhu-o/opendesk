@@ -1,8 +1,10 @@
-import { Tool, ToolContext, ToolResult, checkPermission } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, permissionHint, PERMISSION_FIX, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 export class ScreenshotTool extends Tool {
   name = "screenshot";
+  title = "Take Screenshot";
+  annotations: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
   description =
     "Capture a screenshot of the current screen or a sub-region. " +
     "Pass marks=true to overlay numbered boxes on interactive elements (Set-of-Marks).";
@@ -44,7 +46,10 @@ export class ScreenshotTool extends Tool {
         metadata: {},
       };
     } catch (e) {
-      return this.err("Screenshot error", `Failed to capture screenshot: ${e}`);
+      const message = `Failed to capture screenshot: ${e}`;
+      // A failed capture on macOS is almost always Screen Recording.
+      const hint = permissionHint(message) || (process.platform === "darwin" ? PERMISSION_FIX : "");
+      return this.err("Screenshot error", hint ? `${message}\n\n${hint}` : message);
     }
   }
 }

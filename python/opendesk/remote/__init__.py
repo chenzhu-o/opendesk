@@ -25,6 +25,7 @@ from opendesk.remote.policy import (
     ConsolePolicy,
     OBSERVATION_METHODS,
     Policy,
+    RulePolicy,
 )
 from opendesk.remote.server import (
     OpendeskServer,
@@ -45,6 +46,7 @@ __all__ = [
     "Policy",
     "AllowAllPolicy",
     "ConsolePolicy",
+    "RulePolicy",
     "OBSERVATION_METHODS",
     "AuditLog",
 ]
