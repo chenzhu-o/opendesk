@@ -3,8 +3,15 @@
 
 Prefer this tool over raw mouse clicks: it resolves elements by their visible
 name, so it works at any window position / screen resolution.  Internally it
-queries :meth:`Computer.ui_tree` to find a target and then clicks at the
-element's logical bounds.center.
+queries :meth:`Computer.ui_tree` to find a target, invokes the element's
+native accessibility action, and only falls back to clicking the element's
+logical bounds.center.
+
+Backends that hand out element refs (the native macOS helper) show them in
+``get_tree`` output as ``[ref]``; passing ``ref=`` acts on exactly that
+element with no name matching.  With ``OPENDESK_BACKGROUND=1`` the tool never
+moves the user's cursor and types / presses keys by posting events straight
+to the target app.
 
 The UI tool itself is platform-agnostic — all platform-specific accessibility
 behaviour lives in the active :class:`Computer` backend.
@@ -20,6 +27,7 @@ from pydantic import Field
 from opendesk.computer.base import CapabilityUnsupported
 from opendesk.computer.types import Capability, Modifier, Point, UIElement
 from opendesk.tools.base import Tool, ToolContext, ToolResult
+from opendesk.tools.mouse import background_default
 
 
 _MODIFIER_NAMES: dict[str, Modifier] = {
@@ -47,6 +55,13 @@ def _flatten_tree(root: UIElement) -> list[UIElement]:
     for child in root.children:
         out.extend(_flatten_tree(child))
     return out
+
+
+def _find_by_ref(root: UIElement, ref: str) -> Optional[UIElement]:
+    for node in _flatten_tree(root):
+        if node.ref == ref:
+            return node
+    return None
 
 
 def _find_element(
@@ -88,24 +103,45 @@ async def _try_perform_action(
         return False
 
 
-def _format_tree(root: UIElement, max_lines: int = 200) -> str:
+# Unlabelled layout containers add nesting but nothing to act on.
+_LAYOUT_ROLES = {"AXGroup", "AXScrollArea", "AXSplitGroup", "AXLayoutArea", "AXUnknown"}
+
+
+def _is_layout_noise(node: UIElement) -> bool:
+    return node.role in _LAYOUT_ROLES and not node.name and not node.value
+
+
+def _format_tree(root: UIElement, max_lines: int = 250) -> str:
+    """Indented outline: ``[ref] [role] label = "value"`` per element."""
     lines: list[str] = []
     if root.name or root.role:
-        lines.append(f"Window: {root.name or root.role}")
+        head = f"Window: {root.name or root.role}"
+        lines.append(head + (f"  [{root.ref}]" if root.ref else ""))
+    clipped = False
 
     def visit(node: UIElement, depth: int) -> None:
+        nonlocal clipped
         if len(lines) >= max_lines:
+            clipped = True
             return
-        if node is not root and (node.name or node.role):
+        shown = node is not root and bool(node.name or node.role) and not _is_layout_noise(node)
+        if shown:
             indent = "  " * depth
+            ref = f"[{node.ref}] " if node.ref else ""
             label = node.name or "(unnamed)"
-            lines.append(f"{indent}[{node.role}] {label}")
+            value = ""
+            if node.value and node.value != node.name:
+                v = node.value.replace("\n", " ")
+                value = f' = "{v[:60]}{"…" if len(v) > 60 else ""}"'
+            lines.append(f"{indent}{ref}[{node.role}] {label}{value}")
         for child in node.children:
-            visit(child, depth + 1)
+            visit(child, depth + (1 if shown or node is root else 0))
 
     visit(root, 0)
     if len(lines) <= 1:
         return ""
+    if clipped or root.metadata.get("truncated"):
+        lines.append("… (more elements not shown — narrow with title/role, or act by ref)")
     return "\n".join(lines)
 
 
@@ -118,6 +154,11 @@ class UITool(Tool):
     """
 
     name = "ui"
+    title = "Accessibility UI Actions"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Interact with UI elements by name on any OS — no coordinates needed. "
         "ALWAYS try this before the mouse tool. Actions:\n"
@@ -126,7 +167,10 @@ class UITool(Tool):
         "  click_menu — click a menu item, e.g. File → Save\n"
         "  type       — type text (clipboard-paste, Unicode-safe)\n"
         "  press_key  — press a key or chord: key='return', modifiers=['command']\n"
-        "  get_value  — read the current text value of a named element"
+        "  get_value  — read the current text value of a named element\n"
+        "get_tree shows each element as [ref] [role] label. Pass ref=<ref> to "
+        "click / type / get_value / press_key on exactly that element — fastest "
+        "and most reliable; refs stay the same while the UI does."
     )
 
     class Params(Tool.Params):
@@ -142,6 +186,13 @@ class UITool(Tool):
             )
         )
         title: Optional[str] = Field(default=None, description="Title or label of the UI element.")
+        ref: Optional[str] = Field(
+            default=None,
+            description=(
+                "Element ref from get_tree output, e.g. 'k3x9q0'. Targets exactly "
+                "that element for click / type / get_value / press_key."
+            ),
+        )
         role: Optional[str] = Field(
             default=None,
             description=(
@@ -187,8 +238,10 @@ class UITool(Tool):
         sandbox = get_sandbox(ctx.session_id)
 
         _summary = {"action": params.action, "app": params.app, "title": params.title}
+        if params.ref:
+            _summary["ref"] = params.ref
         _replay_p = {
-            "action": params.action, "app": params.app, "title": params.title,
+            "action": params.action, "app": params.app, "title": params.title, "ref": params.ref,
             "role": params.role, "text": params.text, "menu": params.menu,
             "menu_item": params.menu_item, "key": params.key, "modifiers": params.modifiers,
             "window_index": params.window_index,
@@ -211,7 +264,7 @@ class UITool(Tool):
         await sandbox.record_action(
             ActionType.UI_ACTION, _summary, result=result_msg[:200], replay_params=_replay_p,
         )
-        label = params.title or params.menu_item or params.key or ""
+        label = params.title or params.menu_item or params.key or params.ref or ""
         return ToolResult(
             title=f"UI: {params.action} '{label}' in {params.app}",
             output=result_msg,
@@ -230,24 +283,38 @@ class UITool(Tool):
             )
 
         if params.action == "click":
-            if not params.title and not params.role:
-                raise ValueError("Provide at least 'title' or 'role' for click.")
-            tree = await comp.ui_tree(app=params.app)
-            element = _find_element(tree, title=params.title, role=params.role)
-            if element is None:
-                raise RuntimeError(
-                    f"No element title={params.title!r} role={params.role!r} in "
-                    f"'{params.app}'. Run get_tree to see available elements."
-                )
-            used_a11y = await _try_perform_action(comp, element, "click", params.app)
+            if params.ref:
+                direct = self._ref_element(params)
+                if await _try_perform_action(comp, direct, "click", params.app):
+                    return f"Clicked [{params.ref}] in {params.app} (via a11y)."
+                tree = await comp.ui_tree(app=params.app)
+                element = self._require_ref(tree, params)
+                used_a11y = False
+            else:
+                if not params.title and not params.role:
+                    raise ValueError("Provide 'ref', or at least 'title' or 'role', for click.")
+                tree = await comp.ui_tree(app=params.app)
+                element = _find_element(tree, title=params.title, role=params.role)
+                if element is None:
+                    raise RuntimeError(
+                        f"No element title={params.title!r} role={params.role!r} in "
+                        f"'{params.app}'. Run get_tree to see available elements."
+                    )
+                used_a11y = await _try_perform_action(comp, element, "click", params.app)
+            how = "a11y"
             if not used_a11y:
                 if element.bounds is None:
                     raise RuntimeError(
                         f"Element '{element.name}' has no bounds and no native a11y action — cannot click."
                     )
-                await comp.click(element.bounds.center)
-            how = "a11y" if used_a11y else "bounds-center"
-            return f"Clicked [{element.role}] {element.name!r} in {params.app} (via {how})."
+                if background_default():
+                    await comp.background_click(element.bounds.center)
+                    how = "background click"
+                else:
+                    await comp.click(element.bounds.center)
+                    how = "bounds-center"
+            ref = f" [{element.ref}]" if element.ref else ""
+            return f"Clicked{ref} [{element.role}] {element.name!r} in {params.app} (via {how})."
 
         if params.action == "click_menu":
             if not params.menu or not params.menu_item:
@@ -282,24 +349,50 @@ class UITool(Tool):
         if params.action == "type":
             if not params.text:
                 raise ValueError("'text' is required for action='type'.")
+            preview = params.text[:60] + ("…" if len(params.text) > 60 else "")
+            where = f"[{params.ref}] in {params.app}" if params.ref else params.app
+            if background_default():
+                # Keystrokes posted to the app's process: no activation, no
+                # cursor movement, no clipboard.
+                target = self._ref_element(params, value=params.text) if params.ref else UIElement(
+                    role="application", name=params.app, value=params.text,
+                    metadata={"app": params.app},
+                )
+                await self._background_perform(comp, target, "type", params)
+                return f"Typed {len(params.text)} chars into {where} (background): {preview!r}"
             await comp.focus_app(params.app)
             await asyncio.sleep(0.2)
+            if params.ref:
+                await self._focus_ref(comp, params)
             await comp.type_text(params.text)
-            preview = params.text[:60] + ("…" if len(params.text) > 60 else "")
-            return f"Typed {len(params.text)} chars into {params.app}: {preview!r}"
+            return f"Typed {len(params.text)} chars into {where}: {preview!r}"
 
         if params.action == "press_key":
             if not params.key:
                 raise ValueError("'key' is required for action='press_key'.")
+            combo = ("+".join(params.modifiers) + "+" if params.modifiers else "") + params.key
+            if background_default():
+                meta = {"app": params.app, "key": params.key, "modifiers": list(params.modifiers)}
+                target = self._ref_element(params) if params.ref else UIElement(
+                    role="application", name=params.app,
+                )
+                target.metadata.update(meta)
+                await self._background_perform(comp, target, "key", params)
+                return f"Pressed {combo} in {params.app} (background)."
             await comp.focus_app(params.app)
             await asyncio.sleep(0.15)
+            if params.ref:
+                await self._focus_ref(comp, params)
             await comp.press(params.key, modifiers=_to_modifiers(params.modifiers))
-            combo = ("+".join(params.modifiers) + "+" if params.modifiers else "") + params.key
             return f"Pressed {combo} in {params.app}."
 
         if params.action == "get_value":
+            if params.ref:
+                tree = await comp.ui_tree(app=params.app)
+                element = self._require_ref(tree, params)
+                return element.value or element.name or "(no value)"
             if not params.title and not params.role:
-                raise ValueError("Provide 'title' or 'role' for get_value.")
+                raise ValueError("Provide 'ref', 'title' or 'role' for get_value.")
             tree = await comp.ui_tree(app=params.app)
             element = _find_element(tree, title=params.title, role=params.role)
             if element is None:
@@ -309,3 +402,42 @@ class UITool(Tool):
             return element.value or element.name or "(no value)"
 
         raise ValueError(f"Unknown action: {params.action!r}")
+
+    @staticmethod
+    def _ref_element(params: "UITool.Params", value: Optional[str] = None) -> UIElement:
+        return UIElement(
+            role=params.role or "", name=params.title or "", value=value,
+            ref=params.ref, metadata={"app": params.app},
+        )
+
+    @staticmethod
+    def _require_ref(tree: UIElement, params: "UITool.Params") -> UIElement:
+        assert params.ref is not None
+        element = _find_by_ref(tree, params.ref)
+        if element is None:
+            raise RuntimeError(
+                f"No element with ref {params.ref!r} in '{params.app}'. Refs change "
+                "when the UI changes — run get_tree again."
+            )
+        return element
+
+    @staticmethod
+    async def _background_perform(
+        comp, target: UIElement, action: str, params: "UITool.Params",
+    ) -> None:
+        try:
+            await comp.perform_ui_action(target, action, app=params.app)
+        except CapabilityUnsupported as exc:
+            raise RuntimeError(
+                "Background mode (OPENDESK_BACKGROUND=1) delivers keystrokes straight "
+                "to the app, which needs the native macOS helper (opendesk-ax) with "
+                "Accessibility permission. Unset OPENDESK_BACKGROUND to type in the "
+                f"foreground instead. ({exc})"
+            ) from exc
+
+    async def _focus_ref(self, comp, params: "UITool.Params") -> None:
+        """Best-effort keyboard focus on the ref'd element before typing."""
+        try:
+            await comp.perform_ui_action(self._ref_element(params), "focus", app=params.app)
+        except Exception:
+            pass

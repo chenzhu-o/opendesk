@@ -1,8 +1,10 @@
-import { Tool, ToolContext, ToolResult, checkPermission } from "./base.js";
+import { Tool, ToolContext, ToolResult, checkPermission, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 export class OCRTool extends Tool {
   name = "ocr";
+  title = "Read Screen Text (OCR)";
+  annotations: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
   description = "Extract text from the screen or a screen region using OCR.";
 
   schema = {

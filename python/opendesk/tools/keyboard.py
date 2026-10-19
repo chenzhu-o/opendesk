@@ -16,6 +16,11 @@ class KeyboardTool(Tool):
     """Type text or press keyboard keys and shortcuts."""
 
     name = "keyboard"
+    title = "Keyboard Input"
+    annotations = {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": True,
+    }
     description = (
         "Simulate keyboard input: type a string of text, press a single key, "
         "or send a key combination (hotkey). Unicode text is fully supported."

@@ -48,6 +48,10 @@ from opendesk.computer.types import (
 
 _PLATFORM = platform.system()
 
+# perform_ui_action actions that only the native helper can do; never fall
+# back to an AppleScript click for these.
+_NATIVE_ONLY_ACTIONS = frozenset({"type", "key", "focus", "set_value"})
+
 
 # ---------------------------------------------------------------------------
 # Lazy backend imports
@@ -64,8 +68,12 @@ def _pyautogui() -> Any:
         ) from exc
 
 
+_AX_CHECKED = False
+
+
 def _check_macos_accessibility() -> None:
-    if _PLATFORM != "Darwin":
+    global _AX_CHECKED
+    if _PLATFORM != "Darwin" or _AX_CHECKED:
         return
     r = subprocess.run(
         ["osascript", "-e", 'tell application "System Events" to get name of first process'],
@@ -76,6 +84,8 @@ def _check_macos_accessibility() -> None:
             "macOS Accessibility permission is required. Grant it under "
             "System Settings -> Privacy & Security -> Accessibility."
         )
+    if r.returncode == 0:
+        _AX_CHECKED = True
 
 
 def _osascript(script: str, *, timeout: int = 15) -> str:
@@ -85,6 +95,137 @@ def _osascript(script: str, *, timeout: int = 15) -> str:
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip())
     return r.stdout.strip()
+
+
+def _native() -> Any:
+    """The native macOS accessibility helper module, or None when unusable."""
+    if _PLATFORM != "Darwin":
+        return None
+    try:
+        from opendesk.computer import macos_native
+    except Exception:
+        return None
+    try:
+        return macos_native if macos_native.available() else None
+    except Exception:
+        return None
+
+
+def _wayland() -> Any:
+    """The Wayland backend module when running under a Wayland session."""
+    if _PLATFORM != "Linux":
+        return None
+    from opendesk.computer import wayland
+    return wayland if wayland.is_wayland() else None
+
+
+# ---------------------------------------------------------------------------
+# Windows UI Automation — batched (cached) tree retrieval
+# ---------------------------------------------------------------------------
+
+# UIA property ids (UIAutomationClient.h).
+_UIA_BOUNDING_RECT = 30001
+_UIA_CONTROL_TYPE = 30003
+_UIA_NAME = 30005
+_UIA_HAS_FOCUS = 30008
+_UIA_IS_ENABLED = 30010
+_UIA_AUTOMATION_ID = 30011
+_UIA_VALUE = 30045
+_UIA_TREE_SCOPE_SUBTREE = 7  # Element | Children | Descendants
+
+_UIA_CONTROL_TYPES = {
+    50000: "Button", 50001: "Calendar", 50002: "CheckBox", 50003: "ComboBox",
+    50004: "Edit", 50005: "Hyperlink", 50006: "Image", 50007: "ListItem",
+    50008: "List", 50009: "Menu", 50010: "MenuBar", 50011: "MenuItem",
+    50012: "ProgressBar", 50013: "RadioButton", 50014: "ScrollBar", 50015: "Slider",
+    50016: "Spinner", 50017: "StatusBar", 50018: "Tab", 50019: "TabItem",
+    50020: "Text", 50021: "ToolBar", 50022: "ToolTip", 50023: "Tree",
+    50024: "TreeItem", 50025: "Custom", 50026: "Group", 50027: "Thumb",
+    50028: "DataGrid", 50029: "DataItem", 50030: "Document", 50031: "SplitButton",
+    50032: "Window", 50033: "Pane", 50034: "Header", 50035: "HeaderItem",
+    50036: "Table", 50037: "TitleBar", 50038: "Separator",
+}
+
+
+def _uia_cached_tree(
+    uia: Any, root: Any, *, max_depth: int = 12, max_nodes: int = 1500,
+) -> list[UIElement]:
+    """Read ``root``'s subtree with one UIA ``CacheRequest``.
+
+    ``uia`` is an ``IUIAutomation`` instance and ``root`` an
+    ``IUIAutomationElement`` (pywinauto exposes both).  All properties for
+    the whole subtree come back in one cross-process call; the walk below
+    only touches the local cache.  Returns the root's children.
+    """
+    req = uia.CreateCacheRequest()
+    for prop in (
+        _UIA_BOUNDING_RECT, _UIA_CONTROL_TYPE, _UIA_NAME, _UIA_HAS_FOCUS,
+        _UIA_IS_ENABLED, _UIA_AUTOMATION_ID, _UIA_VALUE,
+    ):
+        req.AddProperty(prop)
+    req.TreeScope = _UIA_TREE_SCOPE_SUBTREE
+    cached = root.BuildUpdatedCache(req)
+    count = 0
+
+    def prop(el: Any, pid: int) -> Any:
+        try:
+            return el.GetCachedPropertyValue(pid)
+        except Exception:
+            return None
+
+    def children_of(el: Any) -> list[Any]:
+        try:
+            arr = el.GetCachedChildren()
+        except Exception:
+            return []
+        if arr is None:
+            return []
+        return [arr.GetElement(i) for i in range(arr.Length)]
+
+    def convert(el: Any, depth: int) -> UIElement:
+        nonlocal count
+        count += 1
+        try:
+            rect = el.CachedBoundingRectangle  # tagRECT (left/top/right/bottom)
+        except Exception:
+            rect = prop(el, _UIA_BOUNDING_RECT)  # VARIANT form: (x, y, w, h)
+        bounds = None
+        try:
+            if rect is not None:
+                if hasattr(rect, "left"):
+                    left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+                    bounds = Rect(x=left, y=top, width=right - left, height=bottom - top)
+                elif len(rect) == 4:  # (x, y, w, h) from the VARIANT form
+                    bounds = Rect(x=rect[0], y=rect[1], width=rect[2], height=rect[3])
+        except Exception:
+            bounds = None
+        ctype = prop(el, _UIA_CONTROL_TYPE)
+        value = prop(el, _UIA_VALUE)
+        auto_id = prop(el, _UIA_AUTOMATION_ID)
+        kids: list[UIElement] = []
+        if depth < max_depth:
+            for child in children_of(el):
+                if count >= max_nodes:
+                    break
+                kids.append(convert(child, depth + 1))
+        return UIElement(
+            role=_UIA_CONTROL_TYPES.get(ctype, str(ctype or "?")),
+            name=str(prop(el, _UIA_NAME) or "").strip()[:120],
+            value=str(value)[:500] if value not in (None, "") else None,
+            bounds=bounds,
+            focused=bool(prop(el, _UIA_HAS_FOCUS)),
+            enabled=prop(el, _UIA_IS_ENABLED) is not False,
+            actions=["click"],
+            children=kids,
+            metadata={"automation_id": auto_id} if auto_id else {},
+        )
+
+    out: list[UIElement] = []
+    for child in children_of(cached):
+        if count >= max_nodes:
+            break
+        out.append(convert(child, 1))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +439,10 @@ class LocalComputer(Computer):
         await asyncio.to_thread(self._pointer_sync, event)
 
     def _pointer_sync(self, event: PointerEvent) -> None:
+        wl = _wayland()
+        if wl is not None:
+            wl.pointer(event)
+            return
         _check_macos_accessibility()
         pag = _pyautogui()
         pag.FAILSAFE = True
@@ -329,6 +474,10 @@ class LocalComputer(Computer):
         await asyncio.to_thread(self._key_sync, event)
 
     def _key_sync(self, event: KeyEvent) -> None:
+        wl = _wayland()
+        if wl is not None:
+            wl.key(event)
+            return
         _check_macos_accessibility()
         pag = _pyautogui()
         keyname = _to_pyautogui_key(event.keysym)
@@ -342,10 +491,14 @@ class LocalComputer(Computer):
 
     def _text_sync(self, text_input: TextInput) -> None:
         """Insert text via clipboard-paste for full Unicode support."""
-        _check_macos_accessibility()
         text = text_input.text
         if not text:
             return
+        wl = _wayland()
+        if wl is not None:
+            wl.type_text(text, interval_ms=text_input.interval_ms)
+            return
+        _check_macos_accessibility()
         if _PLATFORM == "Darwin":
             subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
             time.sleep(0.05)
@@ -520,7 +673,17 @@ class LocalComputer(Computer):
         return await asyncio.to_thread(self._focused_window_sync)
 
     def _focused_window_sync(self) -> Optional[Window]:
+        """Frontmost app and, where cheaply available, its front window title."""
         if _PLATFORM == "Darwin":
+            native = _native()
+            if native is not None:
+                info = native.frontmost()
+                if info and info.get("app"):
+                    name = str(info["app"])
+                    return Window(
+                        id=name, title=str(info.get("window_title") or name), app_name=name,
+                        pid=info.get("pid"), focused=True,
+                    )
             try:
                 r = subprocess.run(
                     ["osascript", "-e",
@@ -529,9 +692,50 @@ class LocalComputer(Computer):
                 )
                 if r.returncode == 0 and r.stdout.strip():
                     name = r.stdout.strip()
-                    return Window(id=name, title=name, app_name=name, focused=True)
+                    title = name
+                    try:
+                        r2 = subprocess.run(
+                            ["osascript", "-e",
+                             'tell application "System Events" to tell '
+                             '(first process whose frontmost is true) to '
+                             'get name of front window'],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if r2.returncode == 0 and r2.stdout.strip():
+                            title = r2.stdout.strip()
+                    except Exception:
+                        pass
+                    return Window(id=name, title=title, app_name=name, focused=True)
             except Exception:
                 pass
+            return None
+        if _PLATFORM == "Linux":
+            if shutil.which("xdotool"):
+                try:
+                    r = subprocess.run(
+                        ["xdotool", "getactivewindow", "getwindowname"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    title = r.stdout.strip() if r.returncode == 0 else ""
+                    r2 = subprocess.run(
+                        ["xdotool", "getactivewindow", "getwindowclassname"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    app = r2.stdout.strip() if r2.returncode == 0 else ""
+                    if title or app:
+                        return Window(id=app or title, title=title or app, app_name=app or title, focused=True)
+                except Exception:
+                    pass
+            return None
+        if _PLATFORM == "Windows":
+            try:
+                import pygetwindow as gw  # type: ignore[import-not-found]
+                w = gw.getActiveWindow()
+                if w is not None and w.title:
+                    return Window(id=w.title, title=w.title, app_name=w.title, focused=True)
+            except Exception:
+                pass
+            return None
         return None
 
     async def focus_window(self, window_id: str) -> None:
@@ -561,12 +765,27 @@ class LocalComputer(Computer):
     ) -> UIElement:
         target = app or window_id
         if _PLATFORM == "Darwin":
+            tree = self._macos_native_ui_tree(target, max_depth)
+            if tree is not None:
+                return tree
             return self._macos_ui_tree(target, max_depth)
         if _PLATFORM == "Linux":
             return self._linux_ui_tree(target, max_depth)
         if _PLATFORM == "Windows":
             return self._windows_ui_tree(target, max_depth)
         return UIElement(role="root", name="(unsupported platform)")
+
+    def _macos_native_ui_tree(self, app: Optional[str], max_depth: int) -> Optional[UIElement]:
+        """Fast path: the persistent ``opendesk-ax`` helper (batched AX reads,
+        Electron support, stable refs).  None means "use AppleScript"."""
+        native = _native()
+        if native is None:
+            return None
+        try:
+            result = native.tree(app=app or None, max_depth=max_depth)
+        except Exception:
+            return None
+        return native.to_ui_element(result)
 
     def _macos_ui_tree(self, app: Optional[str], max_depth: int) -> UIElement:
         if not app:
@@ -732,6 +951,21 @@ end tell
         except Exception as exc:
             return UIElement(role="root", name=f"(connect failed: {exc})")
 
+        # Fast path: one UIA CacheRequest fetches the whole subtree's
+        # properties in a single cross-process call instead of several
+        # round trips per control.
+        cached: Optional[list[UIElement]] = None
+        try:
+            from pywinauto.uia_defines import IUIA  # type: ignore[import-not-found]
+            cached = _uia_cached_tree(IUIA().iuia, dlg.element_info.element, max_depth=max(max_depth, 12))
+        except Exception:
+            cached = None
+        if cached is not None:
+            return UIElement(
+                role="window", name=dlg.window_text(),
+                children=cached, metadata={"app": target or "", "source": "uia-cache"},
+            )
+
         children: list[UIElement] = []
         try:
             for ctrl in dlg.descendants():
@@ -773,6 +1007,8 @@ end tell
         if _PLATFORM == "Darwin":
             self._macos_perform_ui_action(element, action, app)
             return
+        if action.lower() in _NATIVE_ONLY_ACTIONS:
+            raise CapabilityUnsupported(Capability.UI_ACTIONS, backend=self.BACKEND)
         if _PLATFORM == "Linux":
             self._linux_perform_ui_action(element, action, app)
             return
@@ -781,6 +1017,45 @@ end tell
             return
         raise CapabilityUnsupported(Capability.UI_ACTIONS, backend=self.BACKEND)
 
+    async def background_click(
+        self,
+        point: Point,
+        *,
+        button: PointerButton = PointerButton.LEFT,
+        count: int = 1,
+    ) -> str:
+        return await asyncio.to_thread(self._background_click_sync, point, button, count)
+
+    def _background_click_sync(self, point: Point, button: PointerButton, count: int) -> str:
+        """macOS: press the accessible element under ``point`` (AXPress), or
+        post the click straight to the owning process.  Never moves the
+        user's cursor."""
+        native = _native()
+        if native is None:
+            raise CapabilityUnsupported(
+                Capability.INPUT_POINTER,
+                backend=f"{self.BACKEND} (background input needs the macOS opendesk-ax helper)",
+            )
+        from opendesk.computer.macos_native import NativeAXError
+        x, y = float(point.x), float(point.y)
+        hit = native.element_at(x, y)
+        where = f"({int(x)}, {int(y)})"
+        if hit and button is PointerButton.LEFT and count == 1 and hit.get("pressable"):
+            try:
+                native.perform(hit["pressable"], "AXPress")
+                label = native.node_name(hit) or hit.get("role", "element")
+                return f"Pressed {label!r} at {where} via accessibility (cursor not moved)."
+            except NativeAXError:
+                pass
+        try:
+            res = native.click_pid(
+                x, y, pid=(hit or {}).get("pid"), button=button.value, count=count,
+            )
+        except NativeAXError as exc:
+            raise RuntimeError(f"Background click at {where} failed: {exc}") from exc
+        app = (hit or {}).get("app") or f"pid {res.get('pid')}"
+        return f"Posted {button.value} click x{count} at {where} to {app} (cursor not moved)."
+
     # ------------------------------------------------------------------
     # macOS — AppleScript
     # ------------------------------------------------------------------
@@ -788,6 +1063,10 @@ end tell
     def _macos_perform_ui_action(
         self, element: UIElement, action: str, app: Optional[str],
     ) -> None:
+        if self._macos_native_perform(element, action, app):
+            return
+        if action.lower() in _NATIVE_ONLY_ACTIONS:
+            raise CapabilityUnsupported(Capability.UI_ACTIONS, backend=self.BACKEND)
         target_app = app or element.metadata.get("app")
         if not target_app:
             r = subprocess.run(
@@ -854,6 +1133,55 @@ end tell
                 f"AppleScript {action!r} on {element.role}:{element.name!r} "
                 f"in {target_app} failed: {exc}"
             ) from exc
+
+    def _macos_native_perform(
+        self, element: UIElement, action: str, app: Optional[str],
+    ) -> bool:
+        """Act through the native helper.  Returns False when the caller
+        should fall back to AppleScript; raises when the helper reported a
+        definite failure for an action AppleScript cannot do either."""
+        if element.metadata.get("menu_path"):
+            return False
+        act = action.lower()
+        if not element.ref and act not in ("type", "key"):
+            return False
+        native = _native()
+        if native is None:
+            return False
+        from opendesk.computer.macos_native import NativeAXError
+        target_app = app or element.metadata.get("app") or None
+        try:
+            if act in ("type", "key"):
+                # Keystrokes posted to the element's (or app's) process: no
+                # activation, no cursor movement, no clipboard.
+                kwargs: dict[str, Any] = (
+                    {"ref": element.ref} if element.ref else {"app": target_app}
+                )
+                if act == "type":
+                    native.key_pid(text=element.value or "", **kwargs)
+                else:
+                    native.key_pid(
+                        key=element.metadata.get("key"),
+                        modifiers=element.metadata.get("modifiers") or (),
+                        **kwargs,
+                    )
+                return True
+            assert element.ref is not None
+            if act in ("click", "press", "axpress", "activate"):
+                native.perform(element.ref, "AXPress")
+            elif act == "focus":
+                native.focus(element.ref)
+            elif act == "set_value":
+                native.set_value(element.ref, element.value or "")
+            elif action.startswith("AX"):
+                native.perform(element.ref, action)
+            else:
+                native.perform(element.ref, "AXPress")
+            return True
+        except NativeAXError as exc:
+            if act in _NATIVE_ONLY_ACTIONS or not (element.name or element.role):
+                raise RuntimeError(f"Native {action!r} on ref {element.ref} failed: {exc}") from exc
+            return False
 
     def _macos_invoke_menu_path(self, app: str, menu_path: list[str]) -> None:
         if len(menu_path) < 2:

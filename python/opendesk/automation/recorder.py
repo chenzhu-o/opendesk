@@ -325,6 +325,7 @@ def _ax_context_at(x: float, y: float) -> dict:
             elem = system.getElementAtPosition(x, y)
             ctx["role"] = _ax_attr(elem, "AXRole", "AXRoleDescription")
             ctx["title"] = _ax_attr(elem, "AXTitle", "AXDescription", "AXLabel")
+            ctx["identifier"] = _ax_attr(elem, "AXIdentifier")
             raw_val = getattr(elem, "AXValue", None)
             if raw_val is not None:
                 ctx["value"] = str(raw_val)[:80]
@@ -357,6 +358,7 @@ def _ax_focused_context() -> dict:
             elem = app.AXFocusedUIElement
             ctx["role"] = _ax_attr(elem, "AXRole", "AXRoleDescription")
             ctx["title"] = _ax_attr(elem, "AXTitle", "AXDescription", "AXLabel")
+            ctx["identifier"] = _ax_attr(elem, "AXIdentifier")
         except Exception:
             pass
     except ImportError:

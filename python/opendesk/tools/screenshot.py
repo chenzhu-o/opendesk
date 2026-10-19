@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import sys
 from typing import Any, List, Optional
 
 from pydantic import Field
@@ -62,6 +63,8 @@ class ScreenshotTool(Tool):
     """Capture a screenshot of the full screen or a specific region."""
 
     name = "screenshot"
+    title = "Take Screenshot"
+    annotations = {"readOnlyHint": True, "openWorldHint": False}
     description = (
         "Capture a screenshot of the current screen or a sub-region. "
         "Returns the image so you can observe the current UI state before "
@@ -140,9 +143,16 @@ class ScreenshotTool(Tool):
                 params={"region": params.region, "zoom": params.zoom},
                 error=str(exc),
             )
+            from opendesk.computer.permissions import permission_hint
+            message = f"Failed to capture screenshot: {exc}"
+            # A failed local capture on macOS is almost always Screen Recording.
+            local_mac = sys.platform == "darwin" and type(ctx.computer).__name__ == "LocalComputer"
+            hint = permission_hint(message) or (
+                permission_hint("screen recording") if local_mac else ""
+            )
             return ToolResult(
                 title="Screenshot error",
-                output=f"Failed to capture screenshot: {exc}",
+                output=f"{message}\n\n{hint}" if hint else message,
                 error=True,
             )
 

@@ -33,6 +33,54 @@ class Trajectory:
 
 
 # ---------------------------------------------------------------------------
+# Serialisation  (persisted next to the procedure so it can be compiled later)
+# ---------------------------------------------------------------------------
+
+_EVENT_FIELDS = (
+    "timestamp", "action_type", "x", "y", "button", "text", "key",
+    "scroll_dx", "scroll_dy", "accessibility_context",
+)
+
+
+def trajectory_to_dict(trajectory: Trajectory, *, include_screenshots: bool = False) -> dict:
+    """Plain-dict form of *trajectory*; screenshots are dropped by default."""
+    events = []
+    for ev in trajectory.events:
+        d = {f: getattr(ev, f) for f in _EVENT_FIELDS}
+        if include_screenshots and ev.screenshot_after:
+            d["screenshot_after"] = ev.screenshot_after
+        events.append({k: v for k, v in d.items() if v not in (None, 0) or k in ("timestamp", "action_type")})
+    out = {
+        "task_name": trajectory.task_name,
+        "started_at": trajectory.started_at,
+        "stopped_at": trajectory.stopped_at,
+        "events": events,
+    }
+    if include_screenshots and trajectory.initial_screenshot:
+        out["initial_screenshot"] = trajectory.initial_screenshot
+    return out
+
+
+def trajectory_from_dict(data: dict) -> Trajectory:
+    """Inverse of :func:`trajectory_to_dict` (unknown keys are ignored)."""
+    events = []
+    for raw in data.get("events", []):
+        kwargs = {f: raw[f] for f in _EVENT_FIELDS if f in raw}
+        if "screenshot_after" in raw:
+            kwargs["screenshot_after"] = raw["screenshot_after"]
+        kwargs.setdefault("timestamp", 0.0)
+        kwargs.setdefault("action_type", "unknown")
+        events.append(TrajectoryEvent(**kwargs))
+    return Trajectory(
+        task_name=data.get("task_name", "task"),
+        events=events,
+        initial_screenshot=data.get("initial_screenshot"),
+        started_at=data.get("started_at", 0.0),
+        stopped_at=data.get("stopped_at", 0.0),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Content builder  (multimodal — text + image blocks)
 # ---------------------------------------------------------------------------
 

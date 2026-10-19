@@ -1,7 +1,8 @@
 {
   "name": "@vitalops/opendesk-sdk",
-  "version": "0.2.0",
-  "description": "JavaScript/TypeScript SDK for opendesk — give any AI agent eyes and hands on your desktop, including remote machine control",
+  "version": "0.3.0",
+  "description": "OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.",
+  "mcpName": "io.github.vitalops/opendesk",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,6 +13,7 @@
     }
   },
   "bin": {
+    "opendesk-sdk": "bin/opendesk-mcp.js",
     "opendesk-js": "bin/opendesk.js",
     "opendesk-js-mcp": "bin/opendesk-mcp.js"
   },
@@ -29,17 +31,33 @@
   "keywords": [
     "opendesk",
     "computer-use",
-    "desktop-automation",
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "desktop-automation",
     "ai-agent",
-    "remote-control"
+    "claude",
+    "accessibility",
+    "screenshot",
+    "ocr",
+    "rpa",
+    "remote-control",
+    "screen-memory",
+    "recall",
+    "desktop-history"
   ],
+  "homepage": "https://github.com/vitalops/opendesk#readme",
+  "bugs": {
+    "url": "https://github.com/vitalops/opendesk/issues"
+  },
+  "author": "VitalOps",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@nut-tree-fork/nut-js": "^4.2.0",
     "bonjour-service": "^1.2.1",
     "clipboardy": "^4.0.0",
+    "jimp": "^0.22.10",
     "msgpackr": "^1.10.1",
     "node-cron": "^3.0.0",
     "screenshot-desktop": "^1.15.0",
@@ -60,5 +78,6 @@
     "type": "git",
     "url": "git+https://github.com/vitalops/opendesk.git",
     "directory": "js"
-  }
+  },
+  "optionalDependencies": {}
 }

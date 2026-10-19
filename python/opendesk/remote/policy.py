@@ -20,6 +20,11 @@ Two implementations ship in-tree:
   a clear log line and can switch to :class:`AllowAllPolicy` or write a
   custom :class:`Policy` (e.g. backed by desktop notifications).
 
+A third, :class:`RulePolicy`, applies ``<home>/policy.json`` rules + presets
+and the ``control.json`` kill switch to inbound methods (``opendesk serve
+--approve policy``); ``confirm`` decisions pop a native dialog / console
+prompt on the controlled machine.
+
 Custom policies are just classes implementing :class:`Policy` — pass them
 to :class:`~opendesk.remote.server.OpendeskServer` or :func:`serve`.
 """
@@ -29,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 from opendesk.tools.base import PermissionDeniedError
 
@@ -200,3 +205,124 @@ def _summarise(method: str, params: dict[str, Any]) -> str:
     if method == "power.lock":
         return "lock the screen"
     return method
+
+
+# ---------------------------------------------------------------------------
+# RulePolicy — policy.json + control.json on the controlled machine
+# ---------------------------------------------------------------------------
+
+# protocol method -> (tool, action) used for classification / rule matching.
+_METHOD_MAP: dict[str, tuple[str, Optional[str]]] = {
+    "system.capabilities": ("screenshot", None),
+    "system.environment": ("screenshot", None),
+    "display.capture": ("screenshot", None),
+    "display.cursor_position": ("mouse", "cursor_position"),
+    "display.displays": ("screenshot", None),
+    "display.subscribe": ("screenshot", None),
+    "input.key": ("keyboard", "press"),
+    "input.text": ("keyboard", "type"),
+    "input.subscribe": ("screenshot", None),
+    "windows.list": ("app", "list"),
+    "windows.focused": ("app", "list"),
+    "windows.focus": ("app", "focus"),
+    "windows.move": ("app", "focus"),
+    "windows.close": ("app", "close"),
+    "apps.list": ("app", "list"),
+    "apps.open": ("app", "open"),
+    "apps.close": ("app", "close"),
+    "apps.focus": ("app", "focus"),
+    "ui.tree": ("ui", "get_tree"),
+    "clipboard.read": ("clipboard", "read"),
+    "clipboard.write": ("clipboard", "write"),
+    "fs.read": ("fs", "read"),
+    "fs.list": ("fs", "list"),
+    "fs.stat": ("fs", "stat"),
+    "fs.write": ("fs", "write"),
+    "fs.mkdir": ("fs", "mkdir"),
+    "fs.move": ("fs", "move"),
+    "fs.delete": ("fs", "delete"),
+    "process.list": ("process", "list"),
+    "process.shell": ("script", "shell"),
+    "process.exec": ("script", "exec"),
+    "power.lock": ("power", "lock"),
+    "notifications.list": ("notifications", "list"),
+}
+
+
+def method_to_tool(method: str, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Map an inbound protocol *method* to ``(tool, params)`` for the policy engine."""
+    params = params or {}
+    if method.startswith("tool."):
+        # JS-style tool RPC: tool.<name> with the tool's own params.
+        return method[5:], dict(params)
+    if method == "input.pointer":
+        evt = params.get("event") or {}
+        return "mouse", {"action": str(evt.get("action") or "move")}
+    if method == "ui.action":
+        p: dict[str, Any] = {"action": str(params.get("action") or "click")}
+        if params.get("app"):
+            p["app"] = params["app"]
+        return "ui", p
+    tool, action = _METHOD_MAP.get(method, (method, None))
+    p = {"action": action} if action else {}
+    name = params.get("name")
+    if tool == "app" and isinstance(name, str):
+        p["app"] = name
+    return tool, p
+
+
+class RulePolicy:
+    """Applies ``policy.json`` + ``control.json`` to inbound remote methods.
+
+    * ``control.json`` stopped / takeover → every method is refused.
+    * ``block`` → :class:`PermissionDeniedError`.
+    * ``confirm`` → native dialog / console prompt on this machine (MCP
+      elicitation isn't available here); no answer → denied.
+
+    Rules match on the mapped tool name (``mouse``, ``keyboard``,
+    ``script``…) *or* the raw method (``process.shell``); ``peer`` matches
+    the controller's friendly name.
+    """
+
+    def __init__(self, home: Optional[Any] = None) -> None:
+        self._home = home
+
+    async def check(
+        self,
+        *,
+        peer_public: bytes,
+        peer_name: str,
+        method: str,
+        params: dict[str, Any],
+    ) -> None:
+        from opendesk.safety._home import resolve_home
+        from opendesk.safety.approval import ApprovalRequest, request_approval
+        from opendesk.safety.control import check_control
+        from opendesk.safety.policy import decide, load_policy
+
+        home = resolve_home(self._home)
+        label = peer_name or f"peer-{peer_public.hex()[:6]}"
+        msg = check_control(home)
+        if msg:
+            raise PermissionDeniedError(msg)
+        tool, tparams = method_to_tool(method, params)
+        policy = load_policy(home)
+        d = decide(tool, tparams, {"home": home, "peer": label, "method": method},
+                   policy=policy)
+        if d.decision == "allow":
+            return
+        summary = _summarise(method, params)
+        if d.decision == "block":
+            raise PermissionDeniedError(f"{label} → {summary}: blocked by policy — {d.reason}")
+        req = ApprovalRequest(
+            tool=tool, action=tparams.get("action"), summary=f"{label} wants to {summary}",
+            reason=d.reason, risk=d.risk.level.value,
+            timeout=policy.approval_timeout,
+        )
+        chain = [c for c in (policy.approval_chain or ["native", "console"]) if c != "mcp"]
+        outcome = await request_approval(req, chain=chain)
+        if not outcome.approved:
+            raise PermissionDeniedError(f"{label} → {summary}: not approved ({outcome.message})")
+        msg = check_control(home)
+        if msg:
+            raise PermissionDeniedError(msg)

@@ -60,6 +60,21 @@ export class ComputerSandbox {
     return [...this.log];
   }
 
+  /** Number of recorded entries (used by the safety guard to scrub new ones). */
+  get size(): number {
+    return this.log.length;
+  }
+
+  /** Rewrite entries recorded since index `start` — used to scrub secret values. */
+  scrubFrom(start: number, redact: <T>(v: T) => T): void {
+    for (const e of this.log.slice(Math.min(start, this.log.length))) {
+      e.params = redact(e.params);
+      if (e.result !== undefined) e.result = redact(e.result);
+      if (e.error !== undefined) e.error = redact(e.error);
+      if (e.replayParams !== undefined) e.replayParams = redact(e.replayParams);
+    }
+  }
+
   summary(): string {
     const counts: Record<string, number> = {};
     for (const e of this.log) counts[e.action] = (counts[e.action] ?? 0) + 1;

@@ -18,6 +18,11 @@ The log records *summaries* of params (e.g. ``"send pointer down at (812,
 not the raw bytes / full text — this avoids leaking PII or large payloads
 into the log file.  Reuses :func:`opendesk.remote.policy._summarise` so the
 two surfaces stay aligned.
+
+Entries are hash-chained (``prev`` / ``hash``, see
+:mod:`opendesk.safety.chain`) so ``opendesk audit verify`` can detect edited,
+deleted or inserted lines.  Older unchained lines at the top of a file are
+still accepted.
 """
 
 from __future__ import annotations
@@ -70,6 +75,7 @@ class AuditLog:
         self._lock = asyncio.Lock()
         self._fh: Optional[Any] = None
         self._current_date: Optional[str] = None
+        self._last_hash: Optional[str] = None
         self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     # ------------------------------------------------------------------
@@ -169,14 +175,17 @@ class AuditLog:
     # ------------------------------------------------------------------
 
     async def _write(self, payload: dict[str, Any]) -> None:
+        from opendesk.safety.chain import GENESIS, seal
         payload = {"ts": time.time(), **payload}
-        line = json.dumps(payload, sort_keys=True, default=str)
         async with self._lock:
             self._roll_if_needed()
             assert self._fh is not None
+            sealed = seal(payload, self._last_hash or GENESIS)
+            line = json.dumps(sealed, sort_keys=True, default=str)
             try:
                 self._fh.write(line + "\n")
                 self._fh.flush()
+                self._last_hash = sealed["hash"]
             except OSError as exc:
                 log.warning("audit log write failed: %s", exc)
 
@@ -192,6 +201,8 @@ class AuditLog:
             self._fh = None
         path = self._dir / f"{today}.jsonl"
         existed = path.exists()
+        from opendesk.safety.chain import last_hash
+        self._last_hash = last_hash(path)
         self._fh = open(path, "a", encoding="utf-8")
         if not existed:
             with contextlib.suppress(OSError):

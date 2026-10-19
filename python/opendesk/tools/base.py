@@ -191,6 +191,20 @@ def interactive_context(session_id: str = "default") -> ToolContext:
 # Tool base class
 # ---------------------------------------------------------------------------
 
+#: MCP ``ToolAnnotations`` hint keys understood by :meth:`Tool.tool_annotations`.
+ANNOTATION_KEYS: tuple[str, ...] = (
+    "readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint",
+)
+
+#: Common annotation presets.  Tools copy one with ``dict(PRESET)`` or
+#: spell their own dict out.
+READ_ONLY: dict[str, bool] = {"readOnlyHint": True, "openWorldHint": False}
+DESKTOP_ACTION: dict[str, bool] = {
+    "readOnlyHint": False, "destructiveHint": True,
+    "idempotentHint": False, "openWorldHint": True,
+}
+
+
 try:
     from pydantic import BaseModel
 except ImportError as _err:
@@ -221,6 +235,15 @@ class Tool(ABC):
     name: str
     description: str
 
+    #: Human-readable display name (MCP ``title``).  Empty → derived from
+    #: :attr:`name` by :meth:`display_title`.
+    title: str = ""
+
+    #: Behaviour hints, MCP ``ToolAnnotations`` keys: ``readOnlyHint``,
+    #: ``destructiveHint``, ``idempotentHint``, ``openWorldHint``.  Subclasses
+    #: override with a fresh dict; never mutate this shared default.
+    annotations: dict[str, bool] = {}
+
     class Params(BaseModel):
         """Default empty parameter model.  Override in subclasses."""
 
@@ -234,16 +257,38 @@ class Tool(ABC):
     # Schema helpers (used by integration adapters)
     # ------------------------------------------------------------------
 
+    def display_title(self) -> str:
+        """Return :attr:`title`, or a title-cased version of :attr:`name`."""
+        return self.title or self.name.replace("_", " ").title()
+
+    def tool_annotations(self) -> dict[str, bool]:
+        """Return a copy of :attr:`annotations` with only known MCP hint keys.
+
+        ``readOnlyHint`` defaults to ``False`` when unset so every tool
+        declares it explicitly; ``destructiveHint`` is dropped for read-only
+        tools (the MCP spec ignores it there).
+        """
+        hints = {k: bool(v) for k, v in dict(self.annotations or {}).items() if k in ANNOTATION_KEYS}
+        hints.setdefault("readOnlyHint", False)
+        if hints["readOnlyHint"]:
+            hints.pop("destructiveHint", None)
+            hints.pop("idempotentHint", None)
+        else:
+            hints.setdefault("destructiveHint", True)
+        return hints
+
     def get_schema(self) -> dict[str, Any]:
         """Return the JSON Schema for this tool's parameters."""
         return self.Params.model_json_schema()
 
     def to_tool_definition(self) -> dict[str, Any]:
-        """Return a generic tool definition dict (name, description, schema)."""
+        """Return a generic tool definition dict (name, title, description, schema, annotations)."""
         return {
             "name": self.name,
+            "title": self.display_title(),
             "description": self.description,
             "parameters": self.get_schema(),
+            "annotations": self.tool_annotations(),
         }
 
     def parse_params(self, arguments: dict[str, Any]) -> "Tool.Params":

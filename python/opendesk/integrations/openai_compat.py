@@ -41,6 +41,7 @@ import json
 from typing import Any
 
 from opendesk.registry import ToolRegistry, create_registry
+from opendesk.safety.guard import run_tool
 from opendesk.tools.base import ToolContext, allow_all_context
 
 
@@ -94,8 +95,7 @@ async def dispatch_tool_call(
 
     try:
         tool = registry.get(tool_name)
-        params = tool.parse_params(arguments)
-        result = await tool.execute(ctx, params)
+        result = await run_tool(tool, ctx, arguments)
     except Exception as exc:
         return {
             "role": "tool",

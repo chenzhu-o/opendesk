@@ -1,4 +1,4 @@
-import { Tool, ToolContext, ToolResult } from "./base.js";
+import { Tool, ToolContext, ToolResult, type ToolAnnotations } from "./base.js";
 import { getSandbox } from "../computer/sandbox.js";
 
 // Actions that produce no side-effects — skip during replay.
@@ -31,6 +31,8 @@ async function loadTool(name: string): Promise<Tool> {
 
 export class AuditTool extends Tool {
   name = "audit";
+  title = "Audit Log & Session Replay";
+  annotations: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
   description =
     "Show or replay the session audit log.\n" +
     "  action='show'   — display recorded actions (format='summary' or 'full')\n" +

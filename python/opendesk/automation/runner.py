@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +15,14 @@ logger = logging.getLogger(__name__)
 async def run_task(task: str, project_dir: Path) -> str:
     """Execute a task string and return a status message.
 
-    If task starts with 'replay <name>', loads and executes the learned procedure
-    directly using opendesk tools (no LLM needed).
+    If task starts with 'replay <name>', runs the compiled program for that
+    task deterministically (no LLM, no API key).  Only when there is no
+    compiled program, or it stops at a step it cannot complete, does it fall
+    back to an LLM replaying the natural-language procedure.
 
-    Otherwise, sends the task as a natural language instruction to Claude via
-    the Anthropic SDK (requires ANTHROPIC_API_KEY env var).
+    Otherwise, sends the task as a natural language instruction to Claude —
+    via the Anthropic SDK when ANTHROPIC_API_KEY is set, else via headless
+    Claude Code (``claude -p``, subscription login) when it is installed.
     """
     task = task.strip()
 
@@ -28,12 +33,35 @@ async def run_task(task: str, project_dir: Path) -> str:
         return await _run_natural_language(task, project_dir)
 
 
+def _replay_context(name: str) -> Any:
+    """ToolContext for compiled replays (tests patch this to inject a fake Computer)."""
+    from opendesk.tools.base import ToolContext
+    return ToolContext(session_id=f"scheduler-{name}")
+
+
 async def _run_replay(name: str, project_dir: Path) -> str:
-    """Load a learned procedure and execute it via Claude."""
+    """Run the compiled program for *name*; fall back to Claude + the NL procedure."""
+    from opendesk.automation.program import format_self_heal, load_program, run_program
     from opendesk.automation.storage import load_procedure
 
     proc = load_procedure(project_dir, name)
+    program = load_program(project_dir, name)
+    heal_note = ""
+    if program is not None:
+        try:
+            result = await run_program(program, _replay_context(name))
+        except Exception as exc:
+            result = None
+            heal_note = f"Compiled replay raised an error: {exc}"
+        if result is not None and result.ok:
+            return result.summary()
+        if result is not None:
+            heal_note = format_self_heal(result, proc)
+            logger.info("compiled replay of %s failed: %s", name, result.reason)
+
     if proc is None:
+        if program is not None:
+            return f"Error: compiled replay failed and no NL procedure exists for '{name}'. {heal_note[:300]}"
         return f"Error: no procedure found for '{name}'"
 
     steps = proc.get("steps", [])
@@ -48,20 +76,33 @@ async def _run_replay(name: str, project_dir: Path) -> str:
         "Use the ui tool first, screenshot(marks=True) if needed, mouse as last resort. "
         "Adapt to the current environment."
     )
+    if heal_note:
+        prompt += (
+            "\n\nA deterministic replay already ran and stopped part-way. Do NOT redo the "
+            "completed steps; continue from the failed step.\n\n" + heal_note
+        )
 
-    return await _run_with_claude(prompt)
+    status = await _run_with_claude(prompt, project_dir)
+    if program is not None:
+        return f"compiled replay failed, LLM fallback → {status}"
+    return status
 
 
 async def _run_natural_language(task: str, project_dir: Path) -> str:
     """Send a natural language task to Claude with opendesk tools."""
-    return await _run_with_claude(task)
+    return await _run_with_claude(task, project_dir)
 
 
-async def _run_with_claude(prompt: str) -> str:
+async def _run_with_claude(prompt: str, project_dir: Path | None = None) -> str:
     """Run a prompt through Claude with all opendesk tools available."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        return "Error: ANTHROPIC_API_KEY environment variable not set"
+        if shutil.which("claude"):
+            return await _run_with_claude_code(prompt, project_dir)
+        return (
+            "Error: ANTHROPIC_API_KEY environment variable not set "
+            "(and the 'claude' CLI is not installed for subscription-based runs)"
+        )
 
     try:
         import anthropic
@@ -94,3 +135,15 @@ async def _run_with_claude(prompt: str) -> str:
 
     except Exception as e:
         return f"Error: {e}"
+
+
+async def _run_with_claude_code(prompt: str, project_dir: Path | None) -> str:
+    """Headless Claude Code fallback — uses the user's Claude subscription login."""
+    try:
+        from opendesk.eval.backends import run_claude_headless
+        run = await run_claude_headless(prompt, cwd=str(project_dir) if project_dir else None)
+    except Exception as e:
+        return f"Error: {e}"
+    if run.error:
+        return f"Error: {run.error}"
+    return f"ok (claude-code): {run.final_text[:200]}"

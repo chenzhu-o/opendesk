@@ -1,7 +1,7 @@
 project = "opendesk"
 copyright = "2026, Vitalops Technologies"
 author = "Abhigith Neil Abraham, Fariz Rahman, Fadil Rahman"
-release = "0.2.0"
+release = "0.3.0"
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -29,6 +29,7 @@ myst_enable_extensions = [
 ]
 
 myst_highlight_code_blocks = True
+myst_heading_anchors = 3
 
 html_theme = "sphinx_book_theme"
 html_title = "opendesk"

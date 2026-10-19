@@ -4,41 +4,53 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opendesk"
-version = "0.2.0"
-description = "Open Computer Use Agent — framework for desktop and browser automation"
+version = "0.3.0"
+description = "OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-keywords = ["computer-use", "automation", "accessibility", "ai", "agent", "mcp"]
+authors = [{ name = "VitalOps" }]
+keywords = [
+    "computer-use", "mcp", "mcp-server", "model-context-protocol",
+    "desktop-automation", "ai-agent", "claude", "accessibility",
+    "screenshot", "ocr", "rpa", "remote-desktop", "screen-memory",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Desktop Environment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Testing",
     "Topic :: System :: Operating System",
 ]
 
+# The MCP server and local computer use work out of the box, so
+# `uvx opendesk mcp` / `uvx --from opendesk opendesk-mcp` need no extras.
+# mcp is capped below 2.0: the low-level Server API changed in 2.x.
 dependencies = [
     "pydantic>=2.0",
     "msgpack>=1.0",
-]
-
-[project.optional-dependencies]
-# Core computer use: screen capture + mouse/keyboard control
-core = [
+    "mcp>=1.26,<2",
     "mss>=9.0",
     "Pillow>=10.0",
     "pyautogui>=0.9",
 ]
 
-# MCP server — expose all tools as an MCP server
-mcp = [
-    "mcp>=1.0",
-]
+[project.optional-dependencies]
+# Compatibility aliases: these used to be required for computer use and the
+# MCP server; both are now base dependencies.
+core = []
+mcp = []
 
 # OpenAI-compatible function calling adapter
 openai = [
@@ -72,6 +84,14 @@ learn = [
     "pynput",
 ]
 
+# Screen memory — background capture + OCR + local search.  pynput powers
+# the pause hotkey; OCR uses pytesseract when present, else the native engine.
+memory = [
+    "opendesk[core]",
+    "pynput",
+    "cryptography>=42.0",  # encryption at rest for thumbnails / text
+]
+
 # Scheduled tasks
 schedule = [
     "apscheduler>=3.10",
@@ -94,17 +114,19 @@ app = [
 
 # Everything
 all = [
-    "opendesk[core,mcp,openai,langchain,ocr,learn,schedule,remote,app]",
+    "opendesk[core,mcp,openai,langchain,ocr,learn,memory,schedule,remote,app]",
 ]
 
 [project.scripts]
-opendesk-mcp = "opendesk.integrations.mcp:run_stdio_server"
+opendesk-mcp = "opendesk.integrations.mcp:main"
 opendesk = "opendesk.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/vitalops/opendesk"
-Documentation = "https://github.com/vitalops/opendesk/tree/main/docs"
+Documentation = "https://vitalops.ai/opendesk/docs/"
+Repository = "https://github.com/vitalops/opendesk"
 Issues = "https://github.com/vitalops/opendesk/issues"
+Changelog = "https://github.com/vitalops/opendesk/releases"
 
 [tool.setuptools.packages.find]
 where = ["."]
