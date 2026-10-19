@@ -911,7 +911,8 @@ class TestCrypto:
         key, store = load_or_create_key(tmp_path, create=True)
         assert store == "file" and len(key) == 32
         kf = tmp_path / "memory" / "key"
-        assert oct(os.stat(kf).st_mode & 0o777) == "0o600"
+        if os.name == "posix":  # Windows has no POSIX mode bits
+            assert oct(os.stat(kf).st_mode & 0o777) == "0o600"
         info = read_keyinfo(tmp_path)
         assert info["store"] == "file" and info["key_id"] == _crypto.key_id(key)
         assert key.hex() not in (tmp_path / "memory" / "keyinfo.json").read_text()
