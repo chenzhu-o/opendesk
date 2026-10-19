@@ -8,6 +8,8 @@ import { OCRTool } from "./tools/ocr.js";
 import { UITool } from "./tools/ui.js";
 import { AuditTool } from "./tools/audit.js";
 import { MemoryTool } from "./tools/memory.js";
+import { ScriptTool } from "./tools/script.js";
+import { BrowserTool } from "./tools/browser.js";
 
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
@@ -40,6 +42,8 @@ export function createRegistry(): ToolRegistry {
     new OCRTool(),
     new AuditTool(),
     new MemoryTool(),
+    new ScriptTool(),
+    new BrowserTool(),
   ]) {
     registry.register(tool);
   }

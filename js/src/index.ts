@@ -35,6 +35,11 @@ export {
   type Frame as MemoryFrame, type StoreStats as MemoryStoreStats, type RecorderOptions as MemoryRecorderOptions,
 } from "./memory/index.js";
 
+// Hybrid action paths — scripts and the browser (CDP)
+export { ScriptTool, buildArgv as buildScriptArgv, normalizeOs, type ScriptToolOptions } from "./tools/script.js";
+export { BrowserTool, getBrowserSession, closeBrowserSession, type BrowserToolOptions } from "./tools/browser.js";
+export { CDPConnection, CDPError, DevToolsHTTP, findBrowser, launchBrowser, DEFAULT_CDP_PORT, type CDPTarget } from "./computer/cdp.js";
+
 // Protocol — auth / identity
 export { Identity, generatePairingCode, fingerprint, DEFAULT_HOME } from "./protocol/auth/identity.js";
 export { TrustedPeers, type TrustedPeer } from "./protocol/auth/storage.js";

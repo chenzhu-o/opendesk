@@ -79,6 +79,25 @@ export class OpenDeskClient {
     return this.call("memory", params as Record<string, unknown>);
   }
 
+  /** Run shell / AppleScript / JXA / PowerShell. Prefer this over GUI clicks for non-visual work. */
+  script(params: {
+    action: "shell" | "applescript" | "jxa" | "powershell";
+    code: string; timeout?: number; cwd?: string;
+  }): Promise<ToolResult> {
+    return this.call("script", params as Record<string, unknown>);
+  }
+
+  /** Drive Chrome / Chromium / Edge / Brave over the DevTools Protocol (local machine only). */
+  browser(params: {
+    action: "launch" | "attach" | "tabs" | "open" | "navigate" | "read" | "click"
+      | "type" | "wait_for" | "screenshot" | "eval" | "close_tab";
+    url?: string; port?: number; browser?: string; headless?: boolean; profileDir?: string;
+    tab?: number | string; ref?: string; selector?: string; text?: string; expression?: string;
+    clear?: boolean; submit?: boolean; fullPage?: boolean; maxChars?: number; timeout?: number;
+  }): Promise<ToolResult> {
+    return this.call("browser", params as Record<string, unknown>);
+  }
+
   listTools(): string[] {
     return this.registry.all().map((t) => t.name);
   }

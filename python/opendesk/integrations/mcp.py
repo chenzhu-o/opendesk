@@ -58,7 +58,14 @@ from opendesk.tools.base import ToolContext
 # remotable.
 PEER_AWARE_TOOLS: set[str] = {
     "screenshot", "mouse", "keyboard", "app", "ui", "clipboard", "ocr",
+    "script",
 }
+
+# Tools that never follow the session's default peer: ``browser`` drives a
+# browser on this machine (local-only in v1) and ``fleet`` picks its own
+# peers.  They always get the local computer, so an ambiguous default (several
+# peers paired, none chosen) can't block them.
+LOCAL_ONLY_TOOLS: set[str] = {"browser", "fleet"}
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +150,8 @@ class MCPDispatcher:
         if tool.name in PEER_AWARE_TOOLS and "peer" in arguments:
             raw = arguments.pop("peer")
             peer_arg = raw if isinstance(raw, str) and raw.strip() else None
+        if tool.name in LOCAL_ONLY_TOOLS:
+            peer_arg = LOCAL
 
         try:
             computer, computer_name = await self._session.resolve(peer_arg)
@@ -153,6 +162,7 @@ class MCPDispatcher:
             session_id=f"mcp-{computer_name}",
             permission_handler=self._permission_handler,
             computer=computer,
+            metadata={"mcp_session": self._session, "registry": self._registry},
         )
         try:
             params = tool.parse_params(arguments)

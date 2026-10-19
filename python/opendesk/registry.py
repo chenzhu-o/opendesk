@@ -68,6 +68,9 @@ def create_registry() -> ToolRegistry:
     - ``learn``      — record and replay computer tasks
     - ``audit``      — show the session audit log inside any MCP/agent session
     - ``memory``     — search the local screen-memory history (desktop recall)
+    - ``script``     — shell / AppleScript / JXA / PowerShell (prefer over GUI)
+    - ``browser``    — drive Chrome/Edge/Brave via DevTools (local-only)
+    - ``fleet``      — run one tool call across many paired peers in parallel
     """
     from opendesk.tools.screenshot import ScreenshotTool
     from opendesk.tools.mouse import MouseTool
@@ -79,6 +82,9 @@ def create_registry() -> ToolRegistry:
     from opendesk.tools.automation import LearnTool, ScheduleTool
     from opendesk.tools.audit import AuditTool
     from opendesk.tools.memory import MemoryTool
+    from opendesk.tools.script import ScriptTool
+    from opendesk.tools.browser import BrowserTool
+    from opendesk.tools.fleet import FleetTool
 
     registry = ToolRegistry()
     for tool_cls in (
@@ -93,6 +99,9 @@ def create_registry() -> ToolRegistry:
         ScheduleTool,
         AuditTool,
         MemoryTool,
+        ScriptTool,
+        BrowserTool,
+        FleetTool,
     ):
         registry.register(tool_cls())
 

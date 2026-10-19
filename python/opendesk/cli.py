@@ -1070,6 +1070,61 @@ def _memory_query(home, sub: str, args) -> None:
                 print(f"        {snip[:200]}")
 
 
+# ---------------------------------------------------------------------------
+# Fleet — one tool call across many peers
+# ---------------------------------------------------------------------------
+
+
+def cmd_fleet(args) -> None:
+    """``opendesk fleet run --peers a,b|all --tool screenshot --params '{}'``."""
+    if args.fleet_cmd != "run":
+        print("Usage: opendesk fleet run --peers a,b|all --tool <tool> [--params JSON]")
+        sys.exit(2)
+    import json
+    try:
+        inner_params = json.loads(args.params or "{}")
+        if not isinstance(inner_params, dict):
+            raise ValueError("must be a JSON object")
+    except ValueError as exc:
+        print(f"ERROR: --params: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    from opendesk.integrations.mcp_session import MCPSession
+    from opendesk.registry import create_registry
+    from opendesk.tools.base import ToolContext
+    from opendesk.tools.fleet import FleetTool
+
+    home = Path(args.home).expanduser() if args.home else None
+
+    async def _run():
+        session = MCPSession(home=home)
+        registry = create_registry()
+        tool = FleetTool(session=session, registry=registry)
+        try:
+            params = tool.parse_params({
+                "peers": args.peers, "tool": args.tool, "params": inner_params,
+                "match": args.match, "concurrency": args.concurrency,
+                "timeout": args.timeout, "include_images": bool(args.save_images),
+            })
+            return await tool.execute(ToolContext(session_id="cli-fleet", computer=session.local), params)
+        finally:
+            await session.aclose()
+
+    try:
+        result = asyncio.run(_run())
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(result.output)
+    if args.save_images and result.attachments:
+        out_dir = Path(args.save_images).expanduser()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for att in result.attachments:
+            dest = out_dir / att.filename
+            dest.write_bytes(att.content)
+            print(f"saved {dest}")
+    sys.exit(1 if result.error else 0)
+
 
 def main() -> None:
     import argparse
@@ -1403,6 +1458,17 @@ def main() -> None:
 
     from opendesk.eval.cli import add_eval_parser, cmd_eval
     add_eval_parser(sub)
+    fleet_p = sub.add_parser("fleet", help="Run one tool call across several paired peers")
+    fleet_sub = fleet_p.add_subparsers(dest="fleet_cmd")
+    fr = fleet_sub.add_parser("run", help="Run a tool on peers in parallel")
+    fr.add_argument("--peers", required=True, help="Comma-separated peer names, or 'all'")
+    fr.add_argument("--tool", required=True, help="Tool to run, e.g. script, screenshot, app")
+    fr.add_argument("--params", default="{}", help="Tool arguments as a JSON object")
+    fr.add_argument("--match", default=None, help="Only peers whose description contains these words")
+    fr.add_argument("--concurrency", type=int, default=4)
+    fr.add_argument("--timeout", type=float, default=120.0, help="Seconds per peer")
+    fr.add_argument("--save-images", default=None, help="Directory to write image results to")
+    fr.add_argument("--home", default=None)
 
     args = parser.parse_args()
 
@@ -1416,6 +1482,8 @@ def main() -> None:
         cmd_memory(args)
     elif args.command == "eval":
         cmd_eval(args)
+    elif args.command == "fleet":
+        cmd_fleet(args)
     elif args.command == "pair":
         cmd_pair(args)
     elif args.command == "pair-with":

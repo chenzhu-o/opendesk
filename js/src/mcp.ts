@@ -33,8 +33,9 @@ const LOCAL = "local";
 
 /** Tools that always run on this machine, never routed to a peer.  Screen
  *  memory is deliberately local-only: the history never leaves the machine
- *  it was recorded on. */
-const LOCAL_ONLY_TOOLS = new Set(["memory"]);
+ *  it was recorded on.  The browser tool drives a browser on this machine
+ *  (local-only in v1). */
+const LOCAL_ONLY_TOOLS = new Set(["memory", "browser"]);
 
 interface SessionState {
   defaultPeer: string; // "local" or peer name
