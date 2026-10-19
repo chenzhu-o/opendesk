@@ -49,7 +49,7 @@ The tools only *read* and *configure* the index. Capture happens in a separate d
 **Python**
 
 ```bash
-pip install 'opendesk[memory]' cryptography   # capture deps, pause hotkey, encryption
+pip install 'opendesk[memory]'      # capture deps, pause hotkey, encryption
 opendesk memory start                          # foreground, Ctrl-C to stop
 ```
 

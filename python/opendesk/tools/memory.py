@@ -211,8 +211,9 @@ class _MemoryToolBase(Tool):
             + (f"  ({fmt_ts(st.oldest)} → {fmt_ts(st.newest)})" if st.frames and st.oldest and st.newest else ""),
             f"  size:      {_mb(st.total_bytes)} MB of {cfg.storage_cap_mb} MB cap "
             f"(thumbnails {_mb(st.thumb_bytes)} MB, index {_mb(st.db_bytes)} MB)",
+            f"  trigger:   {_trigger_line(cfg)}",
             f"  retention: {cfg.retention_days} days",
-            f"  interval:  every {cfg.interval_seconds:g}s",
+            *_privacy_lines(cfg, st, state),
             f"  deny list: {', '.join(cfg.deny_apps) if cfg.deny_apps else '(empty)'}",
             f"  hotkey:    {cfg.pause_hotkey or '(disabled)'}",
             f"  search:    {'FTS5 full-text' if fts else 'LIKE fallback (no FTS5)'}",
@@ -224,7 +225,7 @@ class _MemoryToolBase(Tool):
             output="\n".join(lines),
             metadata={
                 "daemon_alive": alive, "paused": pause is not None, "frames": st.frames,
-                "bytes": st.total_bytes, "config": cfg.to_dict(),
+                "bytes": st.total_bytes, "config": cfg.to_dict(), "stats": st.to_dict(),
             },
         )
 
@@ -279,12 +280,27 @@ class _MemoryToolBase(Tool):
         if p.retention_days is not None:
             cfg.retention_days = int(p.retention_days)
             changed.append(f"retention_days={cfg.retention_days}")
+        if p.trigger is not None:
+            cfg.trigger = p.trigger
+            changed.append(f"trigger={cfg.trigger}")
+        privacy_changed = False
+        for name in ("redact", "encrypt_text", "encrypt_thumbnails"):
+            value = getattr(p, name)
+            if value is not None and bool(getattr(cfg, name)) != bool(value):
+                setattr(cfg, name, bool(value))
+                changed.append(f"{name}={'on' if value else 'off'}")
+                privacy_changed = True
         if changed:
             save_config(cfg, home)
         lines = []
         if changed:
             lines.append("Updated: " + ", ".join(changed))
             lines.append("(the running daemon picks this up within a few ticks)")
+            if privacy_changed:
+                lines.append(
+                    "Privacy settings apply to new frames. To convert existing frames, "
+                    "the user can run `opendesk memory reindex`."
+                )
             lines.append("")
         lines.append("Current config:")
         for k, v in cfg.to_dict().items():
@@ -350,6 +366,35 @@ def _frame_line(f: Any, *, snippet: bool = True) -> str:
         if snip:
             line += f"\n          {snip[:220]}"
     return line
+
+
+def _trigger_line(cfg: Any) -> str:
+    if getattr(cfg, "trigger", "interval") == "interval":
+        return f"interval — every {cfg.interval_seconds:g}s"
+    return (f"events — on app/window change (poll {cfg.poll_seconds:g}s, "
+            f"≥{cfg.min_interval_seconds:g}s apart), idle fallback {cfg.interval_seconds:g}s")
+
+
+def _privacy_lines(cfg: Any, st: Any, state: dict) -> list[str]:
+    lines: list[str] = []
+    sources = getattr(st, "text_sources", None) or {}
+    if sources:
+        lines.append("  text:      " + ", ".join(f"{k} ×{v}" for k, v in sorted(sources.items()))
+                     + f"   redaction {'on' if cfg.redact else 'off'}")
+    else:
+        lines.append(f"  text:      redaction {'on' if cfg.redact else 'off'}")
+    key = getattr(st, "key_store", None) or "not created yet"
+    lines.append(
+        f"  encrypt:   thumbnails {'on' if cfg.encrypt_thumbnails else 'off'} "
+        f"({getattr(st, 'encrypted_thumbnails', 0)}/{getattr(st, 'thumbnails', 0)} stored encrypted); "
+        f"text {'on' if cfg.encrypt_text else 'off'} "
+        f"({getattr(st, 'encrypted_text_frames', 0)}/{st.frames}); key: {key}"
+    )
+    if not getattr(st, "encryption_available", True):
+        lines.append("             WARNING: encryption unavailable — new frames are stored unencrypted")
+    if state.get("redactions"):
+        lines.append(f"  redacted:  {state.get('redactions')} secret(s) this daemon run")
+    return lines
 
 
 def _mb(n: int) -> str:
@@ -441,7 +486,8 @@ class MemoryManageTool(_MemoryToolBase):
         "  pause / resume — stop or restart capture (pause accepts duration='1h').\n"
         "  deny     — manage the per-app deny list (deny_add / deny_remove); "
         "with neither, lists it.\n"
-        "  config   — change interval_seconds, storage_cap_mb, retention_days; "
+        "  config   — change interval_seconds, storage_cap_mb, retention_days, "
+        "trigger (events|interval), redact, encrypt_text, encrypt_thumbnails; "
         "with none, shows the config.\n"
         "  delete   — remove stored moments for a time range and/or app. Dry run "
         "unless confirm=true.\n\n"
@@ -470,6 +516,20 @@ class MemoryManageTool(_MemoryToolBase):
         )
         retention_days: Optional[int] = Field(
             default=None, ge=1, description="For action=config: delete frames older than this.",
+        )
+        trigger: Optional[Literal["events", "interval"]] = Field(
+            default=None,
+            description="For action=config: capture on app/window changes ('events') or on a fixed timer ('interval').",
+        )
+        redact: Optional[bool] = Field(
+            default=None, description="For action=config: scrub secrets from text before storing.",
+        )
+        encrypt_text: Optional[bool] = Field(
+            default=None,
+            description="For action=config: store frame text encrypted (exact-word search only).",
+        )
+        encrypt_thumbnails: Optional[bool] = Field(
+            default=None, description="For action=config: store thumbnails encrypted.",
         )
         since: Optional[str] = Field(
             default=None,

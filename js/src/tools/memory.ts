@@ -154,14 +154,21 @@ export abstract class MemoryToolBase extends Tool {
       `  store:     ${store.dir}`,
       `  frames:    ${st.frames}${span}`,
       `  size:      ${mb(st.totalBytes)} MB of ${cfg.storage_cap_mb} MB cap (thumbnails ${mb(st.thumbBytes)} MB, index ${mb(st.indexBytes)} MB)`,
+      cfg.trigger === "interval"
+        ? `  trigger:   interval — every ${cfg.interval_seconds}s`
+        : `  trigger:   events — on app/window change (poll ${cfg.poll_seconds}s, ≥${cfg.min_interval_seconds}s apart), idle fallback ${cfg.interval_seconds}s`,
       `  retention: ${cfg.retention_days} days`,
-      `  interval:  every ${cfg.interval_seconds}s`,
+      `  text:      ${Object.entries(st.textSources ?? {}).sort().map(([k, v]) => `${k} ×${v}`).join(", ")}${Object.keys(st.textSources ?? {}).length ? "   " : ""}redaction ${cfg.redact ? "on" : "off"}`,
+      `  encrypt:   thumbnails ${cfg.encrypt_thumbnails ? "on" : "off"} (${st.encryptedThumbnails}/${st.thumbnails} stored encrypted); ` +
+        `text ${cfg.encrypt_text ? "on" : "off"} (${st.encryptedTextFrames}/${st.frames}); key: ${st.keyStore ?? "not created yet"}`,
+      ...(st.encryptionAvailable === false ? ["             WARNING: encryption unavailable — new frames are stored unencrypted"] : []),
+      ...(state["redactions"] ? [`  redacted:  ${state["redactions"]} secret(s) this daemon run`] : []),
       `  deny list: ${cfg.deny_apps.length ? cfg.deny_apps.join(", ") : "(empty)"}`,
       `  hotkey:    ${cfg.pause_hotkey || "(disabled)"}`,
     ];
     if (st.apps.length) lines.push("  top apps:  " + st.apps.slice(0, 6).map(([a, n]) => `${a || "(unknown)"} ×${n}`).join(", "));
     return this.ok("Memory status", lines.join("\n"), [], {
-      daemonAlive: alive, paused: pause !== null, frames: st.frames, bytes: st.totalBytes, config: cfg.toDict(),
+      daemonAlive: alive, paused: pause !== null, frames: st.frames, bytes: st.totalBytes, config: cfg.toDict(), stats: st,
     });
   }
 
@@ -197,9 +204,27 @@ export abstract class MemoryToolBase extends Tool {
     if (p.intervalSeconds !== undefined) { cfg.interval_seconds = Number(p.intervalSeconds); changed.push(`interval_seconds=${cfg.interval_seconds}`); }
     if (p.storageCapMb !== undefined) { cfg.storage_cap_mb = Math.floor(Number(p.storageCapMb)); changed.push(`storage_cap_mb=${cfg.storage_cap_mb}`); }
     if (p.retentionDays !== undefined) { cfg.retention_days = Math.floor(Number(p.retentionDays)); changed.push(`retention_days=${cfg.retention_days}`); }
+    if (p.trigger !== undefined) {
+      if (p.trigger !== "events" && p.trigger !== "interval") throw new Error("trigger must be 'events' or 'interval'");
+      cfg.trigger = p.trigger; changed.push(`trigger=${cfg.trigger}`);
+    }
+    let privacyChanged = false;
+    const toggles: Array<[keyof Params, "redact" | "encrypt_text" | "encrypt_thumbnails"]> = [
+      ["redact", "redact"], ["encryptText", "encrypt_text"], ["encryptThumbnails", "encrypt_thumbnails"],
+    ];
+    for (const [param, key] of toggles) {
+      const v = p[param];
+      if (v !== undefined && Boolean(cfg[key]) !== Boolean(v)) {
+        cfg[key] = Boolean(v); changed.push(`${key}=${v ? "on" : "off"}`); privacyChanged = true;
+      }
+    }
     if (changed.length) saveConfig(cfg, home);
     const lines: string[] = [];
-    if (changed.length) lines.push("Updated: " + changed.join(", "), "(the running daemon picks this up within a few ticks)", "");
+    if (changed.length) {
+      lines.push("Updated: " + changed.join(", "), "(the running daemon picks this up within a few ticks)");
+      if (privacyChanged) lines.push("Privacy settings apply to new frames. To convert existing frames, the user can run `opendesk-js memory reindex`.");
+      lines.push("");
+    }
     lines.push("Current config:");
     for (const [k, v] of Object.entries(cfg.toDict())) lines.push(`  ${k}: ${Array.isArray(v) ? JSON.stringify(v) : v}`);
     return this.ok("Memory config", lines.join("\n"), [], cfg.toDict() as unknown as Record<string, unknown>);
@@ -250,6 +275,10 @@ interface Params {
   intervalSeconds?: number;
   storageCapMb?: number;
   retentionDays?: number;
+  trigger?: "events" | "interval";
+  redact?: boolean;
+  encryptText?: boolean;
+  encryptThumbnails?: boolean;
   confirm?: boolean;
 }
 
@@ -346,7 +375,7 @@ export class MemoryManageTool extends MemoryToolBase {
     "Actions:\n" +
     "  pause / resume — stop or restart capture (pause accepts duration='1h').\n" +
     "  deny     — manage the per-app deny list (denyAdd / denyRemove); with neither, lists it.\n" +
-    "  config   — change intervalSeconds, storageCapMb, retentionDays; with none, shows the config.\n" +
+    "  config   — change intervalSeconds, storageCapMb, retentionDays, trigger (events|interval), redact, encryptText, encryptThumbnails; with none, shows the config.\n" +
     "  delete   — remove stored moments for a time range and/or app. Dry run unless confirm=true.\n\n" +
     TIME_PHRASES;
 
@@ -365,6 +394,10 @@ export class MemoryManageTool extends MemoryToolBase {
       intervalSeconds: { type: "number", minimum: 5, description: "For action=config: seconds between captures." },
       storageCapMb: { type: "integer", minimum: 16, description: "For action=config: storage ceiling in MB." },
       retentionDays: { type: "integer", minimum: 1, description: "For action=config: delete frames older than this." },
+      trigger: { type: "string", enum: ["events", "interval"], description: "For action=config: capture on app/window changes ('events') or on a fixed timer ('interval')." },
+      redact: { type: "boolean", description: "For action=config: scrub secrets from text before storing." },
+      encryptText: { type: "boolean", description: "For action=config: store frame text encrypted (exact-word search only)." },
+      encryptThumbnails: { type: "boolean", description: "For action=config: store thumbnails encrypted." },
       ...TIME_WINDOW_PROPS,
       confirm: { type: "boolean", default: false, description: "For action=delete: must be true to actually delete." },
     },

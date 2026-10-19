@@ -1325,3 +1325,27 @@ class TestCliV2:
         r = self._run("status", home=tmp_path)
         assert "trigger:   events" in r.stdout
         assert "thumbnails on (1/1 stored encrypted)" in r.stdout and "key: file" in r.stdout
+
+
+class TestMemoryToolPrivacyConfig:
+    @pytest.mark.asyncio
+    async def test_config_sets_trigger_and_privacy_flags(self, tmp_path: Path):
+        from opendesk.tools.memory import MemoryManageTool
+        r = await call(MemoryManageTool(), tmp_path, action="config", trigger="interval",
+                       redact=False, encrypt_text=True, encrypt_thumbnails=False)
+        cfg = load_config(tmp_path)
+        assert (cfg.trigger, cfg.redact, cfg.encrypt_text, cfg.encrypt_thumbnails) == ("interval", False, True, False)
+        assert "opendesk memory reindex" in r.output
+
+    @pytest.mark.asyncio
+    async def test_config_rejects_unknown_trigger(self, tmp_path: Path):
+        from opendesk.tools.memory import MemoryManageTool
+        with pytest.raises(Exception):
+            MemoryManageTool().parse_params({"action": "config", "trigger": "sometimes"})
+
+    @pytest.mark.asyncio
+    async def test_status_reports_trigger_and_encryption(self, tmp_path: Path):
+        seeded_store(tmp_path).close()
+        r = await call(MemoryTool(), tmp_path, action="status")
+        assert "trigger:" in r.output and "encrypt:" in r.output and "redaction" in r.output
+        assert "stats" in r.metadata

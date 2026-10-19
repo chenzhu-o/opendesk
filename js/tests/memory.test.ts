@@ -971,3 +971,19 @@ describe("accessibility text", () => {
     expect(resolved).toBeNull();
   });
 });
+
+
+describe("MemoryManageTool privacy config", () => {
+  it("sets trigger and privacy flags, and status reports them", async () => {
+    const manage = new MemoryManageTool();
+    const r = await manage.execute(ctx(home), { action: "config", trigger: "interval", redact: false, encryptText: true, encryptThumbnails: false });
+    const cfg = loadConfig(home);
+    expect([cfg.trigger, cfg.redact, cfg.encrypt_text, cfg.encrypt_thumbnails]).toEqual(["interval", false, true, false]);
+    expect(r.output).toContain("opendesk-js memory reindex");
+    const bad = await manage.execute(ctx(home), { action: "config", trigger: "sometimes" });
+    expect(bad.error).toBe(true);
+    const st = await new MemoryTool().execute(ctx(home), { action: "status" });
+    expect(st.output).toContain("trigger:   interval");
+    expect(st.output).toContain("encrypt:");
+  });
+});

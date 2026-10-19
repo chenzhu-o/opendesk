@@ -101,6 +101,7 @@ export class OpenDeskClient {
     action: "pause" | "resume" | "deny" | "config" | "delete";
     duration?: string; denyAdd?: string; denyRemove?: string;
     intervalSeconds?: number; storageCapMb?: number; retentionDays?: number;
+    trigger?: "events" | "interval"; redact?: boolean; encryptText?: boolean; encryptThumbnails?: boolean;
     since?: string; until?: string; app?: string; confirm?: boolean;
   }): Promise<ToolResult> {
     return this.call("memory_manage", params as Record<string, unknown>);

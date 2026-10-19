@@ -29,6 +29,7 @@ Nothing leaves the machine: capture, OCR, and storage are all local.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import io
 import logging
@@ -134,7 +135,9 @@ def _native(name: str) -> Optional[Callable[..., Any]]:
     if platform.system() != "Darwin":
         return None
     try:
-        from opendesk.computer import macos_native  # type: ignore[attr-defined]
+        # import_module consults sys.modules first, so a stub installed there
+        # wins over an already-imported package attribute.
+        macos_native = importlib.import_module("opendesk.computer.macos_native")
     except Exception:
         return None
     fn = getattr(macos_native, name, None)

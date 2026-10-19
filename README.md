@@ -252,7 +252,7 @@ npm install @vitalops/opendesk-sdk
 npx opendesk-js memory start     # or: npx opendesk-js memory install-service
 ```
 
-Every ~30 s the daemon captures the screen, OCRs it **on your machine**, and stores the text plus a small thumbnail in `~/.opendesk/memory`. Agents search it with the read-only `memory` tool; `memory_manage` pauses capture or deletes history. Then ask:
+The daemon captures the screen whenever you switch apps or windows (plus an idle fallback), reads the window's text from the **accessibility tree** or with local OCR **on your machine**, redacts secrets, and stores the text plus an **encrypted** thumbnail in `~/.opendesk/memory`. Agents search it with the read-only `memory` tool; `memory_manage` pauses capture or deletes history. Then ask:
 
 ```
 "What was the error message I saw in the terminal on Tuesday?"
@@ -261,6 +261,8 @@ Every ~30 s the daemon captures the screen, OCRs it **on your machine**, and sto
 ```
 
 - **Fully local index** — SQLite + FTS5, no upload, no telemetry.
+- **Encrypted at rest** — thumbnails are AES-GCM encrypted with a key in the OS keychain; text encryption with an exact-word blind index is one flag away (`opendesk memory config --encrypt-text on`).
+- **Secret redaction** — API keys, tokens, card numbers and `password:` pairs are scrubbed before anything is written; private-browsing windows are skipped.
 - **Per-app deny list** — password managers excluded by default; `opendesk memory deny add "bank"` matches app names and window titles.
 - **Pause hotkey** — `Cmd/Ctrl+Shift+Alt+P`, or `opendesk memory pause 2h`.
 - **Storage cap with rolling deletion** — default 2 GB / 30 days; oldest frames go first.

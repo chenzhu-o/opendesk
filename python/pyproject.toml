@@ -89,6 +89,7 @@ learn = [
 memory = [
     "opendesk[core]",
     "pynput",
+    "cryptography>=42.0",  # encryption at rest for thumbnails / text
 ]
 
 # Scheduled tasks
