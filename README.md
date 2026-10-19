@@ -4,7 +4,7 @@
 
 **OpenDesk by VitalOps — open-source computer-use MCP server that lets AI agents see and control macOS, Windows and Linux desktops, locally or across paired machines.**
 
-Screenshots, accessibility-based UI actions, mouse and keyboard, OCR, workflow recording, scheduling, a local screen memory, and remote machine control, all from natural language.
+Screenshots, accessibility-based UI actions, mouse and keyboard, OCR, workflow recording, scheduling, **screen memory**, and remote machine control, all from natural language.
 
 **macOS · Linux · Windows**
 
@@ -41,6 +41,51 @@ https://github.com/user-attachments/assets/659c9e30-e8f6-4a5a-ab81-0fa7ccaf8fb8
 </td>
 </tr>
 </table>
+
+---
+
+<div align="center">
+
+### 🧠 New: Screen memory
+
+**Your agent remembers what was on your screen, and nothing leaves your machine.**
+
+</div>
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**1 · It captures**<br>
+Whenever you switch apps or windows, OpenDesk reads the window's text (accessibility tree, or local OCR) and keeps it with an encrypted thumbnail.
+
+</td>
+<td width="33%" valign="top">
+
+**2 · You ask**<br>
+*"What error did I see in the terminal on Tuesday?"*<br>
+*"Find the invoice number I had open last week."*
+
+</td>
+<td width="33%" valign="top">
+
+**3 · Any agent recalls it**<br>
+Claude Code, Claude Desktop, Cursor, VS Code or any MCP client calls the `memory` tool and answers from your history.
+
+</td>
+</tr>
+</table>
+
+<p align="center">
+🔒 Local SQLite index &nbsp;·&nbsp; 🔐 Encrypted at rest &nbsp;·&nbsp; 🙈 Secrets redacted &nbsp;·&nbsp; 🚫 Per-app deny list &nbsp;·&nbsp; ⏸ Pause hotkey &nbsp;·&nbsp; 🗑 Storage cap
+</p>
+
+```bash
+pip install 'opendesk[memory]'
+opendesk memory start        # then ask your agent about anything you've seen
+```
+
+<p align="center"><a href="#screen-memory"><b>How screen memory works →</b></a></p>
 
 ---
 
@@ -171,7 +216,7 @@ opendesk is built in independently-importable layers:
 | **Remote** | `opendesk serve` / `opendesk pair`, mDNS discovery, client helper. |
 | **Protocol** | Five-frame wire protocol (msgpack binary, no base64 ever), WebSocket transport, mutual X25519 + ChaCha20-Poly1305 auth and encryption. |
 | **Automation** | `learn` + `schedule` backed by pynput recording, JSON storage, APScheduler daemon. |
-| **Memory** | `opendesk memory start` captures the screen every ~30 s, OCRs it locally, and indexes text + thumbnails in SQLite/FTS5. Per-app deny list, pause hotkey, storage cap with rolling deletion. Nothing leaves the machine. |
+| **Memory** | `opendesk memory start` captures on app/window switches (plus an idle fallback), reads text from the accessibility tree or local OCR, redacts secrets, and indexes text + encrypted thumbnails in SQLite/FTS5. Per-app deny list, pause hotkey, storage cap with rolling deletion. Nothing leaves the machine. |
 
 Full details → [docs/architecture](docs/architecture/index.md)
 
@@ -193,7 +238,7 @@ Full details → [docs/architecture](docs/architecture/index.md)
 | `learn` | Record a workflow once, replay it anytime |
 | `schedule` | Run any task or learned procedure on a timer |
 | `audit` | Show the session audit log, replay a session |
-| `memory` | Screen memory (read-only): recall anything that was on screen, fully local (`opendesk memory start`) |
+| **`memory`** 🧠 | **Screen memory** (read-only): recall anything that was on screen, fully local (`opendesk memory start`) |
 | `memory_manage` | Pause capture, edit the deny list, change retention, delete history |
 | `fleet` | Run one tool call on several paired machines in parallel |
 | `opendesk_*` | Pick and inspect paired remote machines (`opendesk_peers`, `opendesk_use`, …) |
@@ -240,7 +285,8 @@ Full guide → [docs/automation](docs/automation/index.md)
 
 ## Screen memory
 
-A searchable, fully local history of what was on your screen — like Rewind or Recall, but open source, cross-platform, and callable by any agent.
+> [!TIP]
+> **A searchable, fully local history of what was on your screen** — like Rewind or Recall, but open source, cross-platform, and callable by any agent.
 
 ```bash
 # Python
