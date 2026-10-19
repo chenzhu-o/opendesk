@@ -566,7 +566,7 @@ class TestMemoryTool:
     @pytest.mark.asyncio
     async def test_timeline_groups_apps(self, tmp_path: Path):
         seeded_store(tmp_path).close()
-        r = await call(MemoryTool(), tmp_path, action="timeline", since="this week", app="chrome")
+        r = await call(MemoryTool(), tmp_path, action="timeline", since="7d", app="chrome")
         assert r.metadata["count"] == 2
         assert "Grafana" in r.output
 

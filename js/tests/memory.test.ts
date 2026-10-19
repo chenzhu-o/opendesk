@@ -473,7 +473,7 @@ describe("MemoryTool", () => {
   it("timeline, status, pause/resume, deny, config", async () => {
     seeded(home);
     const tool = new MemoryTool();
-    let r = await tool.execute(ctx(home), { action: "timeline", since: "this week", app: "chrome" });
+    let r = await tool.execute(ctx(home), { action: "timeline", since: "7d", app: "chrome" });
     expect(r.metadata["count"]).toBe(2);
     expect(r.output).toContain("Grafana");
     r = await tool.execute(ctx(home), { action: "status" });
