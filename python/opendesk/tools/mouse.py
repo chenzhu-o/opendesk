@@ -1,15 +1,31 @@
 """MouseTool — control the mouse pointer via the active
-:class:`~opendesk.computer.Computer`."""
+:class:`~opendesk.computer.Computer`.
+
+``background=true`` clicks without moving the user's cursor (macOS: press
+the accessible element under the point, else post the click straight to the
+owning app).  ``OPENDESK_BACKGROUND=1`` makes that the default and refuses
+actions that would move the cursor.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Literal, Optional
 
 from pydantic import Field
 
+from opendesk.computer.base import CapabilityUnsupported
 from opendesk.computer.types import Point, PointerButton
 from opendesk.tools.base import Tool, ToolContext, ToolResult
+
+
+def background_default() -> bool:
+    """True when ``OPENDESK_BACKGROUND`` asks for cursor-free operation."""
+    return os.environ.get("OPENDESK_BACKGROUND", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+_CLICK_ACTIONS = ("click", "double_click", "triple_click", "right_click", "middle_click")
 
 
 _ACTION_TO_BUTTON: dict[str, PointerButton] = {
@@ -81,6 +97,13 @@ class MouseTool(Tool):
             default=500,
             description="Milliseconds to wait after the action for the UI to settle.",
         )
+        background: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Click without moving the user's cursor or activating the app "
+                "(macOS). Defaults to true when OPENDESK_BACKGROUND=1."
+            ),
+        )
 
     async def execute(self, ctx: ToolContext, params: "MouseTool.Params") -> ToolResult:
         from opendesk.computer.sandbox import ActionType, get_sandbox
@@ -102,7 +125,28 @@ class MouseTool(Tool):
             except Exception as exc:
                 return ToolResult(title="Cursor position error", output=str(exc), error=True)
 
+        env_bg = background_default()
+        background = env_bg if params.background is None else params.background
+        if (env_bg or background) and params.action not in _CLICK_ACTIONS:
+            why = (
+                "OPENDESK_BACKGROUND=1 is set, so actions that move the user's cursor are disabled"
+                if env_bg else "background=true only applies to click actions"
+            )
+            return ToolResult(
+                title="Mouse action refused",
+                output=(
+                    f"mouse {params.action}: {why}. Use the ui tool instead — "
+                    "ui get_tree, then ui click/type/press_key with ref=<ref> — or "
+                    "mouse click with background=true."
+                ),
+                error=True,
+            )
+        if env_bg:
+            background = True
+
         action_label = f"mouse {params.action} at ({params.x}, {params.y})"
+        if background:
+            action_label += " (background)"
         await ctx.check_permission(
             tool="mouse", argument=action_label,
             description=f"Mouse action: {action_label}",
@@ -134,6 +178,8 @@ class MouseTool(Tool):
             "action": params.action, "x": params.x, "y": params.y,
             "amount": params.amount, "duration": params.duration,
         }
+        if background:
+            record_params["background"] = True
         if params.action == "drag":
             record_params["end_x"] = params.end_x
             record_params["end_y"] = params.end_y
@@ -144,12 +190,17 @@ class MouseTool(Tool):
             "duration": params.duration, "settle_ms": params.settle_ms,
             "image_width": params.image_width, "image_height": params.image_height,
         }
+        if background:
+            replay_params["background"] = True
         if params.action == "drag":
             replay_params["end_x"] = params.end_x
             replay_params["end_y"] = params.end_y
 
         try:
-            result_msg = await self._dispatch(ctx, params, logical_point, logical_end)
+            if background:
+                result_msg = await self._background_click(ctx, params, logical_point)
+            else:
+                result_msg = await self._dispatch(ctx, params, logical_point, logical_end)
             if params.settle_ms > 0:
                 await asyncio.sleep(params.settle_ms / 1000.0)
         except Exception as exc:
@@ -198,6 +249,22 @@ class MouseTool(Tool):
             f"({int(scaled.x)},{int(scaled.y)}) scale {sx:.3f}x{sy:.3f}]"
         )
         return scaled, scaled_end, note
+
+    async def _background_click(
+        self, ctx: ToolContext, params: "MouseTool.Params", point: Point,
+    ) -> str:
+        try:
+            return await ctx.computer.background_click(
+                point,
+                button=_ACTION_TO_BUTTON[params.action],
+                count=_CLICK_COUNT[params.action],
+            )
+        except CapabilityUnsupported as exc:
+            raise RuntimeError(
+                "Background clicks need macOS with the native opendesk-ax helper "
+                "(swiftc + Accessibility permission). Use the ui tool with a ref, "
+                f"or unset OPENDESK_BACKGROUND / background. ({exc})"
+            ) from exc
 
     async def _dispatch(
         self,

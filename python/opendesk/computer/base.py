@@ -379,6 +379,24 @@ class Computer(ABC):
                 )
             )
 
+    async def background_click(
+        self,
+        point: Point,
+        *,
+        button: PointerButton = PointerButton.LEFT,
+        count: int = 1,
+    ) -> str:
+        """Click at ``point`` without moving the user's cursor or activating
+        the target app, and return a short description of how it was done.
+
+        Backends that cannot deliver input in the background raise
+        :class:`CapabilityUnsupported` (the default).
+        """
+        raise CapabilityUnsupported(
+            Capability.INPUT_POINTER,
+            backend=f"{getattr(self, 'BACKEND', '')} (no background input)",
+        )
+
     async def drag(
         self,
         start: Point,

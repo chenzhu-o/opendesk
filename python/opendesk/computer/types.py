@@ -22,7 +22,14 @@ import enum
 import time
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +168,15 @@ class Process(BaseModel):
 
 
 class UIElement(BaseModel):
-    """A node in the platform accessibility tree."""
+    """A node in the platform accessibility tree.
+
+    ``ref`` is a short, stable element id handed out by backends that can
+    act on an exact element (the native macOS helper).  The same UI yields
+    the same refs across calls, so an agent can read a tree and then act by
+    ref.  On the wire ``ref`` travels inside ``metadata["ref"]``: peers that
+    predate the field forbid unknown keys, and this keeps them compatible in
+    both directions.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -174,6 +189,28 @@ class UIElement(BaseModel):
     actions: list[str] = Field(default_factory=list)
     children: list["UIElement"] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    ref: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_ref(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("ref") is None:
+            meta = data.get("metadata")
+            if isinstance(meta, dict) and isinstance(meta.get("ref"), str):
+                data = dict(data)
+                meta = dict(meta)
+                data["ref"] = meta.pop("ref")
+                data["metadata"] = meta
+        return data
+
+    @model_serializer(mode="wrap")
+    def _ref_in_metadata(self, handler: SerializerFunctionWrapHandler) -> Any:
+        data = handler(self)
+        if isinstance(data, dict) and "ref" in data:
+            ref = data.pop("ref")
+            if ref is not None:
+                data["metadata"] = {**(data.get("metadata") or {}), "ref": ref}
+        return data
 
 
 UIElement.model_rebuild()

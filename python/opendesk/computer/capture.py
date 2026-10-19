@@ -59,6 +59,13 @@ def capture_screen(
         if img is not None:
             return _encode(img)
 
+    # Wayland: X11 grabbers see nothing (or only XWayland windows); use
+    # grim / the xdg-desktop-portal / gnome-screenshot instead.
+    if _PLATFORM == "Linux":
+        from opendesk.computer import wayland
+        if wayland.is_wayland():
+            return _encode(wayland.capture(region))
+
     try:
         import mss  # type: ignore[import-not-found]
     except ImportError as exc:

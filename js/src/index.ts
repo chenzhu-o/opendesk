@@ -47,6 +47,9 @@ export {
 export { ScriptTool, buildArgv as buildScriptArgv, normalizeOs, type ScriptToolOptions } from "./tools/script.js";
 export { BrowserTool, getBrowserSession, closeBrowserSession, type BrowserToolOptions } from "./tools/browser.js";
 export { CDPConnection, CDPError, DevToolsHTTP, findBrowser, launchBrowser, DEFAULT_CDP_PORT, type CDPTarget } from "./computer/cdp.js";
+// Native macOS accessibility helper (opendesk-ax)
+export * as macosNative from "./computer/macosNative.js";
+export { windowText } from "./computer/macosNative.js";
 
 // Protocol — auth / identity
 export { Identity, generatePairingCode, fingerprint, DEFAULT_HOME } from "./protocol/auth/identity.js";
