@@ -1349,3 +1349,19 @@ class TestMemoryToolPrivacyConfig:
         r = await call(MemoryTool(), tmp_path, action="status")
         assert "trigger:" in r.output and "encrypt:" in r.output and "redaction" in r.output
         assert "stats" in r.metadata
+
+
+class TestHomeResolution:
+    def test_memory_dir_honours_opendesk_home(self, tmp_path: Path, monkeypatch):
+        from opendesk.memory.config import memory_dir
+        monkeypatch.setenv("OPENDESK_HOME", str(tmp_path / "envhome"))
+        assert memory_dir() == tmp_path / "envhome" / "memory"
+        assert memory_dir(tmp_path / "explicit") == tmp_path / "explicit" / "memory"
+
+    @pytest.mark.asyncio
+    async def test_cli_store_and_mcp_tool_share_the_env_home(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("OPENDESK_HOME", str(tmp_path))
+        with MemoryStore() as s:  # no explicit home, like `opendesk memory start`
+            s.add(ts=time.time(), app="TextEdit", title="", text="INV-2026-0042", thumb=None)
+        r = await MemoryTool().execute(ToolContext(), MemoryTool().parse_params({"action": "search", "query": "INV-2026-0042"}))
+        assert r.metadata["count"] == 1

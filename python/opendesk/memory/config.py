@@ -65,8 +65,17 @@ def _default_hotkey() -> str:
 
 
 def memory_dir(home: Optional[Path] = None) -> Path:
-    """Return (and create) the screen-memory directory under *home*."""
-    base = Path(home).expanduser() if home else DEFAULT_HOME
+    """Return (and create) the screen-memory directory under *home*.
+
+    With no *home*, ``$OPENDESK_HOME`` wins over ``~/.opendesk`` — the same
+    order the MCP tools, the safety guard and the JS SDK use, so the daemon
+    and the tools always agree on which store they share.
+    """
+    if home:
+        base = Path(home).expanduser()
+    else:
+        env = os.environ.get("OPENDESK_HOME")
+        base = Path(env).expanduser() if env else DEFAULT_HOME
     d = base / MEMORY_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     try:
