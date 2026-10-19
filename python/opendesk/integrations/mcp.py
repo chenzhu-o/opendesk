@@ -109,10 +109,14 @@ class MCPDispatcher:
         registry: ToolRegistry,
         session: MCPSession,
         permission_handler: Optional[Callable] = None,
+        approver: Optional[Callable] = None,
     ) -> None:
         self._registry = registry
         self._session = session
         self._permission_handler = permission_handler
+        # Safety: async approver (MCP elicitation) handed to the guard via
+        # ctx.metadata["approver"].  Set by create_mcp_server.
+        self.approver = approver
 
     @property
     def session(self) -> MCPSession:
@@ -131,14 +135,33 @@ class MCPDispatcher:
             entries.append(ToolEntry(admin.name, admin.description, admin.schema))
         return entries
 
+    def _safety_metadata(self, peer: str) -> dict[str, Any]:
+        meta: dict[str, Any] = {"peer": peer}
+        if self._session.home is not None:
+            meta["opendesk_home"] = str(self._session.home)
+        if self.approver is not None:
+            meta["approver"] = self.approver
+        return meta
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         admin = _ADMIN_HANDLERS.get(name)
         if admin is not None:
-            try:
-                text = await admin(self._session, dict(arguments))
-            except (MCPSessionError, Exception) as exc:
-                text = f"ERROR: {exc}"
-            return [TextResult(text)]
+            from opendesk.safety.guard import guarded_call
+            from opendesk.tools.base import ToolResult as _TR
+
+            async def _run_admin(args: dict[str, Any]) -> _TR:
+                try:
+                    text = await admin(self._session, dict(args))
+                except (MCPSessionError, Exception) as exc:
+                    text = f"ERROR: {exc}"
+                return _TR(title=name, output=text)
+
+            admin_ctx = ToolContext(
+                session_id="mcp-admin", computer=self._session.local,
+                metadata=self._safety_metadata(LOCAL),
+            )
+            res = await guarded_call(name, dict(arguments), admin_ctx, _run_admin)
+            return [TextResult(res.output)]
 
         try:
             tool = self._registry.get(name)
@@ -162,14 +185,19 @@ class MCPDispatcher:
             session_id=f"mcp-{computer_name}",
             permission_handler=self._permission_handler,
             computer=computer,
-            metadata={"mcp_session": self._session, "registry": self._registry},
+            metadata={
+                **self._safety_metadata(computer_name),
+                "mcp_session": self._session,
+                "registry": self._registry,
+            },
         )
         try:
-            params = tool.parse_params(arguments)
+            tool.parse_params(arguments)
         except Exception as exc:
             return [TextResult(f"ERROR: invalid arguments: {exc}")]
 
-        result = await tool.execute(ctx, params)
+        from opendesk.safety.guard import run_tool
+        result = await run_tool(tool, ctx, arguments)
 
         out: ToolResult = []
         prefix = "" if computer_name == LOCAL else f"[on {computer_name}] "
@@ -215,6 +243,8 @@ def create_mcp_server(
 
     dispatcher = MCPDispatcher(registry, session, permission_handler)
     server = Server("opendesk")
+    from opendesk.safety.approval import make_mcp_elicitation_approver
+    dispatcher.approver = make_mcp_elicitation_approver(server)
 
     @server.list_tools()
     async def list_tools() -> list[mcp_types.Tool]:
@@ -594,6 +624,8 @@ async def _run_stdio() -> None:
     registry = create_registry()
     session = MCPSession()
     server = create_mcp_server(registry, session)
+    from opendesk.safety.control import start_kill_hotkey
+    start_kill_hotkey(session.home)  # no-op unless policy.json sets kill_hotkey
 
     try:
         async with stdio_server() as (read_stream, write_stream):

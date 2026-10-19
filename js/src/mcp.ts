@@ -24,6 +24,9 @@ import { createRegistry, ToolRegistry } from "./registry.js";
 import { allowAllContext, ToolContext } from "./tools/base.js";
 import { TrustedPeers } from "./protocol/auth/storage.js";
 import type { RemoteComputer } from "./computer/remote.js";
+import { guardedCall, runTool } from "./safety/guard.js";
+import { makeMcpElicitationApprover } from "./safety/approval.js";
+import type { ToolResult } from "./tools/base.js";
 
 // ---------------------------------------------------------------------------
 // Per-MCP-session peer tracking
@@ -218,14 +221,20 @@ export function createMcpServer(registry?: ToolRegistry, ctx?: ToolContext, home
     return { tools: [...localTools, ...ADMIN_TOOLS] };
   });
 
+  // Safety: ask the MCP client for approval (elicitation) before falling back
+  // to a native dialog / console prompt.
+  const approver = makeMcpElicitationApprover(server);
+
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
     const a = args as Record<string, unknown>;
 
     // Admin tools
     if (name.startsWith("opendesk_")) {
-      const text = await callAdminTool(name, a);
-      return { content: [{ type: "text", text }] };
+      const res = await guardedCall(name, a, context, async (p) => ({
+        title: name, output: await callAdminTool(name, p), error: false, attachments: [], metadata: {},
+      }), { home, peer: LOCAL, approver });
+      return { content: [{ type: "text", text: res.output }] };
     }
 
     // Determine peer
@@ -237,17 +246,21 @@ export function createMcpServer(registry?: ToolRegistry, ctx?: ToolContext, home
     let result;
     if (effectivePeer === LOCAL || effectivePeer === undefined) {
       const tool = reg.get(name);
-      result = await tool.execute(context, toolArgs);
+      result = await runTool(tool, context, toolArgs, { home, peer: LOCAL, approver });
     } else {
-      // Remote call: forward as a tool method call over the wire
-      const remote = await getRemote(effectivePeer, home);
-      const wireResult = await remote.call(`tool.${name}`, toolArgs);
-      // Reconstruct a ToolResult-shaped object for the MCP response
-      result = {
-        output: String((wireResult?.["output"] as string) ?? JSON.stringify(wireResult)),
-        error: Boolean(wireResult?.["error"]),
-        attachments: (wireResult?.["attachments"] as unknown[]) ?? [],
-      };
+      // Remote call: forward as a tool method call over the wire (guarded here too)
+      result = await guardedCall(name, toolArgs, context, async (p) => {
+        const remote = await getRemote(effectivePeer, home);
+        const wireResult = await remote.call(`tool.${name}`, p);
+        // Reconstruct a ToolResult-shaped object for the MCP response
+        return {
+          title: name,
+          output: String((wireResult?.["output"] as string) ?? JSON.stringify(wireResult)),
+          error: Boolean(wireResult?.["error"]),
+          attachments: ((wireResult?.["attachments"] as unknown[]) ?? []) as ToolResult["attachments"],
+          metadata: {},
+        };
+      }, { home, peer: effectivePeer, approver });
     }
 
     const contents: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
@@ -272,4 +285,6 @@ export async function runMcpStdio(registry?: ToolRegistry, ctx?: ToolContext, ho
   const server = createMcpServer(registry, ctx, home);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  const { startKillHotkey } = await import("./safety/control.js");
+  void startKillHotkey(home); // no-op unless policy.json sets kill_hotkey
 }

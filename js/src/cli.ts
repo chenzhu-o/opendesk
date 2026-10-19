@@ -112,9 +112,11 @@ async function cmdServe(argv: string[]): Promise<void> {
   const noMdns  = bool(flags["no-mdns"]);
   const approve = str(flags["approve"]) || "auto";
 
-  if (approve !== "auto" && approve !== "console") {
-    fatal("--approve must be 'auto' or 'console'");
+  if (approve !== "auto" && approve !== "console" && approve !== "policy") {
+    fatal("--approve must be 'auto', 'console' or 'policy'");
   }
+  // Note: the safety guard (policy.json rules + `opendesk-js stop` kill switch)
+  // runs on every inbound tool call regardless; 'policy' relies on it alone.
 
   const { Identity }        = await import("./protocol/auth/identity.js");
   const { fingerprint }     = await import("./protocol/auth/identity.js");
@@ -166,7 +168,7 @@ async function cmdServe(argv: string[]): Promise<void> {
     advertise: !noMdns,
     audit,
     dispatcherFactory: ({ peerName, peerFingerprint, sessionId }) =>
-      new ToolDispatcher({ registry, ctx, audit, peerName, peerFingerprint, sessionId }),
+      new ToolDispatcher({ registry, ctx, audit, peerName, peerFingerprint, sessionId, home }),
   });
 
   await server.start();
@@ -519,7 +521,12 @@ async function cmdDisconnect(argv: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function cmdAudit(argv: string[]): Promise<void> {
-  const { flags } = parseFlags(argv);
+  const { pos, flags } = parseFlags(argv);
+  if (pos[0] === "verify") {
+    const { runSafetyCommand } = await import("./safety/cli.js");
+    await runSafetyCommand("audit-verify", argv.filter((a) => a !== "verify"));
+    return;
+  }
   const home   = resolveHome(str(flags["home"]) || undefined);
   const date   = str(flags["date"]) || undefined;
   const peer   = str(flags["peer"]) || undefined;
@@ -790,7 +797,13 @@ Controlled-machine commands (run on the machine to be controlled):
   sessions      Show active controller session
   disconnect    Evict the active controller (peer stays paired)
   describe      Read / set / clear this machine's broadcast description
-  audit         View the audit log (session opens, calls, rejections)
+  audit         View the audit log (session opens, calls, rejections); 'audit verify' checks hash chains
+
+Safety (see docs/safety.md):
+  stop / resume        Kill switch — refuse every agent tool call / release it
+  takeover / handback  You drive; agent calls are refused / hand control back
+  secrets              set NAME | list | delete NAME  ({{secret:NAME}} placeholders; macOS Keychain)
+  policy               show | preset <relaxed|standard|strict> | add-rule --tool ... --decision ... | remove-rule N
 
 Controller commands (run on the machine that drives others):
   pair-with     Complete pairing with a machine running 'opendesk-js pair'
@@ -858,6 +871,16 @@ export async function main(): Promise<void> {
       case "sessions":    return await cmdSessions(rest);
       case "disconnect":  return await cmdDisconnect(rest);
       case "audit":       return await cmdAudit(rest);
+      case "stop":
+      case "resume":
+      case "takeover":
+      case "handback":
+      case "secrets":
+      case "policy": {
+        const { runSafetyCommand } = await import("./safety/cli.js");
+        await runSafetyCommand(command, rest);
+        return;
+      }
       case "memory":      return await cmdMemory(rest);
       default:
         printHelp();

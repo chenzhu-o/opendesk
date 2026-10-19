@@ -51,3 +51,7 @@ export { Connection, ConnectionClosed, loopbackPair } from "./protocol/connectio
 export { connectWebSocket, serveWebSocket, WebSocketConnection, WebSocketServerWrapper } from "./protocol/transports/websocket.js";
 export { encode, decode, CodecError } from "./protocol/codec.js";
 export { PROTOCOL_VERSION, type Frame, type HelloFrame, type ReqFrame, type ResFrame, type PushFrame, type ErrorInfo, type ErrorCode } from "./protocol/frames.js";
+
+// Safety — policy, approvals, kill switch, injection guard, chained audit, secrets
+export * as safety from "./safety/index.js";
+export { runTool, guardedCall, classify, decide, type GuardOptions } from "./safety/index.js";

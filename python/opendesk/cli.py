@@ -251,8 +251,11 @@ def cmd_serve(args) -> None:
                 file=sys.stderr,
             )
 
-        from opendesk.remote.policy import AllowAllPolicy, ConsolePolicy
-        policy = AllowAllPolicy() if args.approve == "auto" else ConsolePolicy()
+        from opendesk.remote.policy import AllowAllPolicy, ConsolePolicy, RulePolicy
+        if args.approve == "policy":
+            policy = RulePolicy(home)
+        else:
+            policy = AllowAllPolicy() if args.approve == "auto" else ConsolePolicy()
 
         server = OpendeskServer(
             LocalComputer(), identity, trusted,
@@ -363,6 +366,10 @@ def cmd_check(args) -> None:
 
 def cmd_audit(args) -> None:
     """Print server-side audit log entries (or follow them live)."""
+    if getattr(args, "audit_cmd", None) == "verify":
+        from opendesk.safety.cli import cmd_audit_verify
+        cmd_audit_verify(args)
+        return
     try:
         from opendesk.remote.audit import AuditLog
     except ImportError as exc:
@@ -1184,14 +1191,15 @@ def main() -> None:
     serve_p.add_argument("--no-mdns", action="store_true")
     serve_p.add_argument(
         "--approve",
-        choices=["auto", "console"],
+        choices=["auto", "console", "policy"],
         default="auto",
         help=(
             "How to gate inbound calls.  auto = allow everything (default, "
             "safe for paired single-user setups).  console = prompt on stdin "
             "for non-observation methods (input, fs.write, process.shell, "
             "etc.).  Console mode requires a TTY; under systemd/launchd "
-            "gated calls are denied."
+            "gated calls are denied.  policy = apply policy.json rules and "
+            "the `opendesk stop` / `takeover` kill switch (see docs/safety.md)."
         ),
     )
     serve_p.add_argument(
@@ -1292,7 +1300,11 @@ def main() -> None:
 
     aud_p = sub.add_parser(
         "audit",
-        help="Print the server-side audit log (controlled machine)",
+        help="Print the server-side audit log (controlled machine); `audit verify` checks hash chains",
+    )
+    aud_p.add_argument(
+        "audit_cmd", nargs="?", choices=["verify"], default=None,
+        help="verify = check the tamper-evident hash chains (all days, or --date)",
     )
     aud_p.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     aud_p.add_argument("--peer", default=None, help="Filter by peer name or fingerprint substring")
@@ -1469,8 +1481,14 @@ def main() -> None:
     fr.add_argument("--timeout", type=float, default=120.0, help="Seconds per peer")
     fr.add_argument("--save-images", default=None, help="Directory to write image results to")
     fr.add_argument("--home", default=None)
+    # --- Safety: stop / resume / takeover / handback / secrets / policy --
+    from opendesk.safety import cli as safety_cli
+    safety_cli.register(sub)
 
     args = parser.parse_args()
+
+    if safety_cli.dispatch(args):
+        return
 
     if args.command == "install":
         cmd_install(scope=args.scope)
