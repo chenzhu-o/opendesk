@@ -877,7 +877,7 @@ def cmd_scheduler(args) -> None:
 
 
 def cmd_memory(args) -> None:
-    """``opendesk memory <start|status|pause|resume|search|timeline|show|deny|config|reindex|clear|install-service|uninstall-service>``."""
+    """``opendesk memory <start|status|pause|resume|search|timeline|show|export|deny|config|reindex|clear|install-service|uninstall-service>``."""
     home = Path(args.home).expanduser() if getattr(args, "home", None) else None
     sub = args.memory_cmd or "status"
 
@@ -1000,6 +1000,26 @@ def cmd_memory(args) -> None:
             print("  Failed frames could not be decrypted (memory key missing or replaced) and were left as-is.")
         return
 
+    if sub == "export":
+        from opendesk.memory.export import export_memory
+        from opendesk.memory.timeparse import parse_range
+        try:
+            start, end = parse_range(args.since, args.until)
+            res = export_memory(
+                Path(args.out) if args.out else None, home=home, fmt=args.format,
+                start=start, end=end, app=args.app, query=args.query,
+                thumbnails=not args.no_thumbnails, limit=args.limit,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        thumbs = f", {res.thumbnails} thumbnail(s)" if not args.no_thumbnails else ""
+        print(f"✓ Exported {res.frames} moment(s){thumbs} → {res.file}")
+        for w in res.warnings:
+            print(f"  ! {w}")
+        print("  The export is decrypted: it contains your screen history in plain form.")
+        return
+
     if sub == "clear":
         from opendesk.memory.store import MemoryStore
         from opendesk.memory.timeparse import fmt_range, parse_range
@@ -1050,7 +1070,7 @@ def cmd_memory(args) -> None:
         print("✓ Screen-memory service removed." if removed else "No screen-memory service was installed.")
         return
 
-    print("Usage: opendesk memory start|status|pause|resume|search|timeline|show|deny|config|reindex|clear")
+    print("Usage: opendesk memory start|status|pause|resume|search|timeline|show|export|deny|config|reindex|clear")
 
 
 def _memory_status(home) -> None:
@@ -1547,6 +1567,22 @@ def main() -> None:
     msh.add_argument("--save", default=None, metavar="FILE",
                      help="Write the (decrypted) JPEG thumbnail to FILE")
     msh.add_argument("--home", default=None)
+
+    mex = mem_sub.add_parser(
+        "export",
+        help="Export moments (decrypted text + thumbnails) to JSON, CSV or a browsable HTML page",
+    )
+    mex.add_argument("--out", "-o", default=None, metavar="DIR",
+                     help="New or empty folder to write to (default ~/Downloads/opendesk-memory-<time>)")
+    mex.add_argument("--format", "-f", choices=["json", "csv", "html"], default="json")
+    mex.add_argument("--since", default=None, help="'2h', 'yesterday', 'last week', ISO date (default: all)")
+    mex.add_argument("--until", default=None)
+    mex.add_argument("--app", default=None, help="Only this app name / window title substring")
+    mex.add_argument("--query", "-q", default=None, help="Only moments matching this search")
+    mex.add_argument("--limit", type=int, default=None, help="Max moments (default: all)")
+    mex.add_argument("--no-thumbnails", action="store_true", dest="no_thumbnails",
+                     help="Text only; skip the JPEG thumbnails")
+    mex.add_argument("--home", default=None)
 
     md = mem_sub.add_parser("deny", help="Manage the per-app deny list")
     md.add_argument("--home", default=None)

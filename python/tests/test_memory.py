@@ -544,7 +544,7 @@ class TestMemoryTool:
         read = set(reg.get("memory").get_schema()["properties"]["action"]["enum"])
         manage = set(reg.get("memory_manage").get_schema()["properties"]["action"]["enum"])
         assert read == {"search", "show", "timeline", "status"}
-        assert manage == {"pause", "resume", "deny", "config", "delete"}
+        assert manage == {"pause", "resume", "deny", "config", "delete", "export"}
         assert reg.get("memory").tool_annotations()["readOnlyHint"] is True
         ann = reg.get("memory_manage").tool_annotations()
         assert ann["readOnlyHint"] is False and ann["destructiveHint"] is True
@@ -1366,3 +1366,103 @@ class TestHomeResolution:
             s.add(ts=time.time(), app="TextEdit", title="", text="INV-2026-0042", thumb=None)
         r = await MemoryTool().execute(ToolContext(), MemoryTool().parse_params({"action": "search", "query": "INV-2026-0042"}))
         assert r.metadata["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+
+class TestExport:
+    def test_json_with_decrypted_thumbnails_oldest_first(self, tmp_path: Path):
+        import json
+        from opendesk.memory.export import export_memory
+        seeded_store(tmp_path).close()
+        out = tmp_path / "exp"
+        res = export_memory(out, home=tmp_path)
+        assert (res.frames, res.thumbnails, res.missing_thumbnails) == (5, 4, 0)
+        data = json.loads((out / "frames.json").read_text())
+        rows = data["frames"]
+        assert [r["app"] for r in rows][0] == "Terminal" and rows[-1]["app"] == "Slack"
+        assert rows[0]["text"].startswith("Error: ECONNREFUSED")
+        assert rows[0]["thumbnail"] == f"thumbs/{rows[0]['id']}.jpg"
+        assert (out / rows[0]["thumbnail"]).read_bytes() == b"jpg1"  # decrypted
+        assert rows[-1]["thumbnail"] is None
+
+    def test_filters_query_and_csv(self, tmp_path: Path):
+        import csv
+        from opendesk.memory.export import export_memory
+        seeded_store(tmp_path).close()
+        res = export_memory(tmp_path / "a", home=tmp_path, fmt="csv", app="chrome", thumbnails=False)
+        rows = list(csv.DictReader((tmp_path / "a" / "frames.csv").open()))
+        assert res.frames == 2 and {r["app"] for r in rows} == {"Google Chrome"}
+        assert not (tmp_path / "a" / "thumbs").exists()
+        res = export_memory(tmp_path / "b", home=tmp_path, fmt="csv", query="invoice")
+        rows = list(csv.DictReader((tmp_path / "b" / "frames.csv").open()))
+        assert res.frames == 1 and "INV-2026-0042" in rows[0]["text"]
+        res = export_memory(tmp_path / "c", home=tmp_path, start=_ts(1, 0))
+        assert res.frames == 3
+
+    def test_html_escapes_and_links_thumbs(self, tmp_path: Path):
+        from opendesk.memory.export import export_memory
+        with MemoryStore(tmp_path) as store:
+            store.add(ts=_ts(0), app="Notes", title="<script>alert(1)</script>", text="a < b & c", thumb=b"jpg")
+        res = export_memory(tmp_path / "h", home=tmp_path, fmt="html")
+        page = res.file.read_text()
+        assert res.file.name == "index.html"
+        assert "<script>alert(1)</script>" not in page and "&lt;script&gt;" in page
+        assert "a &lt; b &amp; c" in page and 'src="thumbs/1.jpg"' in page
+
+    def test_refuses_non_empty_target_and_bad_format(self, tmp_path: Path):
+        from opendesk.memory.export import export_memory
+        seeded_store(tmp_path).close()
+        busy = tmp_path / "busy"
+        busy.mkdir()
+        (busy / "x").write_text("keep")
+        with pytest.raises(ValueError, match="not an empty folder"):
+            export_memory(busy, home=tmp_path)
+        assert (busy / "x").read_text() == "keep"
+        with pytest.raises(ValueError, match="format"):
+            export_memory(tmp_path / "f", home=tmp_path, fmt="xml")
+
+    def test_encrypted_text_without_key_is_flagged(self, tmp_path: Path, monkeypatch):
+        import json
+        from opendesk.memory.export import export_memory
+        with MemoryStore(tmp_path, encrypt_text=True) as store:
+            store.add(ts=_ts(0), app="A", title="", text="secret plans", thumb=b"jpg")
+        missing = _crypto.StaticProvider(None)
+        monkeypatch.setattr(_crypto, "resolve_key_provider", lambda home=None: missing)
+        res = export_memory(tmp_path / "e", home=tmp_path)
+        assert res.unreadable_text == 1 and res.missing_thumbnails == 1
+        assert res.warnings
+        rows = json.loads((tmp_path / "e" / "frames.json").read_text())["frames"]
+        assert rows[0]["text"] == "" and "secret" not in (tmp_path / "e" / "frames.json").read_text()
+
+    @pytest.mark.asyncio
+    async def test_manage_tool_export(self, tmp_path: Path):
+        seeded_store(tmp_path).close()
+        out = tmp_path / "tool-exp"
+        r = await call(MemoryManageTool(), tmp_path, action="export", path=str(out),
+                       format="html", since=(_dt.date.today() - _dt.timedelta(days=1)).isoformat(),
+                       until=(_dt.date.today() + _dt.timedelta(days=1)).isoformat())
+        assert not r.error, r.output
+        assert r.metadata["frames"] == 3 and (out / "index.html").exists()
+        assert "decrypted" in r.output
+        r = await call(MemoryManageTool(), tmp_path, action="export", path=str(out))
+        assert r.error and "not an empty folder" in r.output
+
+    def test_cli_export(self, tmp_path: Path, monkeypatch):
+        import subprocess
+        import sys
+        monkeypatch.setattr(_crypto, "resolve_key_provider", _REAL_RESOLVE_KEY_PROVIDER)
+        with MemoryStore(tmp_path) as store:
+            store.add(ts=_ts(0, 9), app="Terminal", title="zsh", text="ECONNREFUSED 5432", thumb=b"jpg")
+        out = tmp_path / "cli-exp"
+        r = subprocess.run(
+            [sys.executable, "-m", "opendesk.cli", "memory", "export", "-o", str(out),
+             "-f", "json", "-q", "econnrefused", "--home", str(tmp_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert r.returncode == 0, r.stderr
+        assert "Exported 1 moment(s), 1 thumbnail(s)" in r.stdout
+        assert (out / "thumbs" / "1.jpg").read_bytes() == b"jpg"

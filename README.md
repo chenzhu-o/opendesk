@@ -312,6 +312,7 @@ The daemon captures the screen whenever you switch apps or windows (plus an idle
 - **Per-app deny list** — password managers excluded by default; `opendesk memory deny add "bank"` matches app names and window titles.
 - **Pause hotkey** — `Cmd/Ctrl+Shift+Alt+P`, or `opendesk memory pause 2h`.
 - **Storage cap with rolling deletion** — default 2 GB / 30 days; oldest frames go first.
+- **Export** — `opendesk memory export --format html` writes a decrypted, browsable copy (also `json` / `csv`) to a folder you choose.
 
 Full reference → [docs/tools/memory.md](docs/tools/memory.md)
 

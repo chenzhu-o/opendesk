@@ -728,6 +728,27 @@ async function cmdMemory(argv: string[]): Promise<void> {
       if (c.failed) console.log("  Failed frames could not be decrypted (memory key missing or replaced) and were left as-is.");
       return;
     }
+    case "export": {
+      const { exportMemory, EXPORT_FORMATS } = await import("./memory/export.js");
+      const { parseRange } = await import("./memory/timeparse.js");
+      const format = (str(flags["format"]) || "json") as (typeof EXPORT_FORMATS)[number];
+      const limit = str(flags["limit"]) ? Number(str(flags["limit"])) : undefined;
+      const noThumbs = bool(flags["no-thumbnails"]);
+      let res;
+      try {
+        const [start, end] = parseRange(str(flags["since"]) || undefined, str(flags["until"]) || undefined);
+        res = exportMemory(str(flags["out"]) || undefined, {
+          home, format, start, end, app: str(flags["app"]) || null,
+          query: str(flags["query"]) || null, thumbnails: !noThumbs, limit,
+        });
+      } catch (e) {
+        fatal((e as Error).message, 2);
+      }
+      console.log(`✓ Exported ${res.frames} moment(s)${noThumbs ? "" : `, ${res.thumbnails} thumbnail(s)`} → ${res.file}`);
+      for (const w of res.warnings) console.log(`  ! ${w}`);
+      console.log("  The export is decrypted: it contains your screen history in plain form.");
+      return;
+    }
     case "clear": {
       const { MemoryStore } = await import("./memory/store.js");
       const { fmtRange, parseRange } = await import("./memory/timeparse.js");
@@ -779,7 +800,7 @@ async function cmdMemory(argv: string[]): Promise<void> {
       return;
     }
     default:
-      fatal("usage: opendesk-js memory start|status|pause|resume|search|timeline|show|deny|config|reindex|clear|install-service|uninstall-service", 2);
+      fatal("usage: opendesk-js memory start|status|pause|resume|search|timeline|show|export|deny|config|reindex|clear|install-service|uninstall-service", 2);
   }
 }
 
@@ -924,6 +945,8 @@ Screen memory (local, searchable history of what was on screen):
   memory search <query>   Full-text search (--since, --until, --app, --limit)
   memory timeline         List captured moments (--since, --until, --app)
   memory show <id>        One moment's full text + thumbnail (--save out.jpg decrypts it)
+  memory export           Decrypted export (--out DIR, --format json|csv|html, --since, --until,
+                          --app, --query, --limit, --no-thumbnails)
   memory deny [add|remove <pattern>]   Per-app / window-title deny list
   memory config           --trigger events|interval --interval N --poll S --min-interval S
                           --redact on|off --encrypt-text on|off --encrypt-thumbnails on|off

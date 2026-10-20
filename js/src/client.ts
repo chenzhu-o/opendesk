@@ -98,11 +98,12 @@ export class OpenDeskClient {
 
   /** Screen memory controls — pause / resume / deny / config / delete. */
   memoryManage(params: {
-    action: "pause" | "resume" | "deny" | "config" | "delete";
+    action: "pause" | "resume" | "deny" | "config" | "delete" | "export";
     duration?: string; denyAdd?: string; denyRemove?: string;
     intervalSeconds?: number; storageCapMb?: number; retentionDays?: number;
     trigger?: "events" | "interval"; redact?: boolean; encryptText?: boolean; encryptThumbnails?: boolean;
     since?: string; until?: string; app?: string; confirm?: boolean;
+    path?: string; format?: "json" | "csv" | "html"; query?: string; thumbnails?: boolean;
   }): Promise<ToolResult> {
     return this.call("memory_manage", params as Record<string, unknown>);
   }

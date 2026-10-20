@@ -64,7 +64,7 @@ const TABLE: Record<string, [Record<string, RiskLevel>, RiskLevel]> = {
   script: [{ list: L, show: L, shell: H, applescript: H, jxa: H, powershell: H, bash: H, python: H, exec: H }, H],
   browser: [{ read: L, tabs: L, screenshot: L, text: L, find: L, eval: H, evaluate: H, js: H }, M],
   memory: [{ search: L, show: L, timeline: L, status: L, recall: L, delete: H, clear: H }, M],
-  memory_manage: [{ status: L, list: L, delete: H, clear: H }, M],
+  memory_manage: [{ status: L, list: L, delete: H, clear: H, export: H }, M],
   fs: [{ read: L, list: L, stat: L, delete: H }, M],
   opendesk_peers: [{}, L],
   opendesk_discover: [{}, L],

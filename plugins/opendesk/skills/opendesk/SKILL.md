@@ -47,7 +47,7 @@ Use `app` to open, focus or close applications, and `clipboard` to move text in 
 ## Screen memory
 
 - `memory` (read-only) searches what was on screen earlier: `memory(action="search", query="invoice", since="last week")`, then `memory(action="show", id=...)`.
-- `memory_manage` pauses capture, edits the per-app deny list, changes retention or deletes history. Deletion is a dry run until `confirm=true`; confirm with the user first.
+- `memory_manage` pauses capture, edits the per-app deny list, changes retention, deletes or exports history. Deletion is a dry run until `confirm=true`; confirm with the user first. Export (`format` json/csv/html) writes decrypted history to disk, so only do it when the user asks.
 - Capture only runs if the user started it (`opendesk memory start`). If `memory(action="status")` says the daemon isn't running, tell the user rather than starting it yourself.
 
 ## Repeating a task

@@ -95,7 +95,7 @@ describe("policy", () => {
     ["mouse", { action: "click" }, "medium"], ["keyboard", { action: "type" }, "medium"], ["clipboard", { action: "read" }, "low"],
     ["script", { action: "shell" }, "high"], ["script", { action: "jxa" }, "high"], ["browser", { action: "tabs" }, "low"],
     ["browser", { action: "navigate" }, "medium"], ["browser", { action: "eval" }, "high"], ["memory", { action: "search" }, "low"],
-    ["memory_manage", { action: "delete" }, "high"], ["learn", { action: "run" }, "medium"], ["opendesk_peers", {}, "low"],
+    ["memory_manage", { action: "delete" }, "high"], ["memory_manage", { action: "export" }, "high"], ["learn", { action: "run" }, "medium"], ["opendesk_peers", {}, "low"],
     ["new_tool", { action: "list" }, "low"], ["new_tool", { action: "zap" }, "medium"],
   ] as Array<[string, Record<string, unknown>, string]>)("classify %s %j → %s", (tool, params, level) => {
     expect(classify(tool, params).level).toBe(level);

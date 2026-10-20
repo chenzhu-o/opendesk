@@ -7,7 +7,7 @@
  *
  *   - `MemoryTool` (`memory`) — read-only: search / show / timeline / status.
  *   - `MemoryManageTool` (`memory_manage`) — pause / resume / deny list /
- *     config / delete.
+ *     config / delete / export.
  *
  * Always local — screen memory never leaves the machine it was recorded on.
  */
@@ -280,6 +280,9 @@ interface Params {
   encryptText?: boolean;
   encryptThumbnails?: boolean;
   confirm?: boolean;
+  path?: string;
+  format?: "json" | "csv" | "html";
+  thumbnails?: boolean;
 }
 
 function limitOf(p: Params): number {
@@ -364,7 +367,7 @@ export class MemoryTool extends MemoryToolBase {
   }
 }
 
-/** State-changing controls for screen memory (pause, deny list, config, delete). */
+/** State-changing controls for screen memory (pause, deny list, config, delete, export). */
 export class MemoryManageTool extends MemoryToolBase {
   name = "memory_manage";
   title = "Manage Screen Memory";
@@ -376,7 +379,9 @@ export class MemoryManageTool extends MemoryToolBase {
     "  pause / resume — stop or restart capture (pause accepts duration='1h').\n" +
     "  deny     — manage the per-app deny list (denyAdd / denyRemove); with neither, lists it.\n" +
     "  config   — change intervalSeconds, storageCapMb, retentionDays, trigger (events|interval), redact, encryptText, encryptThumbnails; with none, shows the config.\n" +
-    "  delete   — remove stored moments for a time range and/or app. Dry run unless confirm=true.\n\n" +
+    "  delete   — remove stored moments for a time range and/or app. Dry run unless confirm=true.\n" +
+    "  export   — write moments (decrypted text + thumbnails) to a folder as json, csv or html; filter with " +
+    "since/until/app/query. Only when the user asks for an export: the files contain their screen history in plain form.\n\n" +
     TIME_PHRASES;
 
   schema = {
@@ -385,7 +390,7 @@ export class MemoryManageTool extends MemoryToolBase {
     properties: {
       action: {
         type: "string",
-        enum: ["pause", "resume", "deny", "config", "delete"],
+        enum: ["pause", "resume", "deny", "config", "delete", "export"],
         description: "What to do. See tool description.",
       },
       duration: { type: "string", description: "For action=pause: how long ('30m', '2h'). Omit to pause until resumed." },
@@ -400,6 +405,10 @@ export class MemoryManageTool extends MemoryToolBase {
       encryptThumbnails: { type: "boolean", description: "For action=config: store thumbnails encrypted." },
       ...TIME_WINDOW_PROPS,
       confirm: { type: "boolean", default: false, description: "For action=delete: must be true to actually delete." },
+      path: { type: "string", description: "For action=export: new or empty folder to write to. Default ~/Downloads/opendesk-memory-<time>." },
+      format: { type: "string", enum: ["json", "csv", "html"], default: "json", description: "For action=export: json, csv, or html (a browsable page)." },
+      query: { type: "string", description: "For action=export: only moments matching this search." },
+      thumbnails: { type: "boolean", default: true, description: "For action=export: include decrypted JPEG thumbnails." },
     },
   };
 
@@ -410,7 +419,27 @@ export class MemoryManageTool extends MemoryToolBase {
       case "deny": return this.deny(home, p);
       case "config": return this.configure(home, p);
       case "delete": return this.remove(home, p);
+      case "export": return this.exportMoments(home, p);
       default: return undefined;
     }
+  }
+
+  private async exportMoments(home: string | undefined, p: Params): Promise<ToolResult> {
+    const { exportMemory } = await import("../memory/export.js");
+    const { fmtRange, parseRange } = await import("../memory/timeparse.js");
+    const [start, end] = parseRange(p.since, p.until);
+    const thumbnails = p.thumbnails ?? true;
+    const res = exportMemory(p.path, {
+      home, format: p.format ?? "json", start, end, app: p.app ?? null, query: p.query ?? null, thumbnails,
+    });
+    let scope = fmtRange(start, end) + (p.app ? `, app~'${p.app}'` : "");
+    if (p.query) scope += `, matching '${p.query}'`;
+    const lines = [`Exported ${res.frames} moment(s) (${scope}) to ${res.file}`];
+    if (thumbnails) lines.push(`${res.thumbnails} thumbnail(s) in ${res.path}/thumbs`);
+    lines.push(...res.warnings, "The export is decrypted; it contains the user's screen history in plain form.");
+    return this.ok("Memory exported", lines.join("\n"), [], {
+      path: res.path, file: res.file, frames: res.frames, thumbnails: res.thumbnails,
+      unreadable_text: res.unreadableText, missing_thumbnails: res.missingThumbnails,
+    });
   }
 }

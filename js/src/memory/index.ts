@@ -27,6 +27,9 @@ export {
   MemoryStore, TEXT_SOURCES, type Frame, type StoreStats, type QueryOpts, type ReindexCounts, type StoreOptions,
   type TextSource, queryTerms, makeSnippet, frameWhen,
 } from "./store.js";
+export {
+  exportMemory, defaultExportDir, EXPORT_FORMATS, type ExportFormat, type ExportOptions, type ExportResult,
+} from "./export.js";
 export { parseWhen, parseRange, fmtTs, fmtDay, fmtRange, type TimeRange } from "./timeparse.js";
 export {
   ScreenMemoryRecorder, startDaemon, titleKey, type RecorderOptions, type CaptureFn, type OcrFn, type FrontmostFn, type WindowTextFn,
