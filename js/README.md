@@ -201,7 +201,7 @@ Full reference: [tools](https://vitalops.ai/opendesk/docs/tools/index.html)
 | `ocr` | `client.ocr(params?)` | Extract text from screen |
 | `audit` | `client.audit(params?)` | Session audit log |
 | `memory` | `client.memory(params)` | Screen memory (read-only) — search a local, OCR'd history of what was on screen |
-| `memory_manage` | `client.memoryManage(params)` | Pause capture, edit the deny list, change storage, delete history |
+| `memory_manage` | `client.memoryManage(params)` | Pause capture, edit the deny list, change storage, delete or export history |
 
 Over MCP every tool has a `title` and `readOnlyHint` / `destructiveHint` annotations, failures return `isError: true`, and the server sends `instructions` describing the recommended workflow.
 
@@ -209,12 +209,13 @@ Over MCP every tool has a `title` and `readOnlyHint` / `destructiveHint` annotat
 
 ## Screen memory
 
-A searchable, fully local history of what was on your screen. Every ~30 s a background daemon captures the screen, OCRs it **on your machine**, and stores the text plus a small thumbnail under `~/.opendesk/memory`. Nothing is uploaded.
+A searchable, fully local history of what was on your screen. Whenever you switch apps or windows (plus an idle fallback), a background daemon reads the window's text from the accessibility tree or with OCR **on your machine**, redacts secrets, and stores the text plus an encrypted thumbnail under `~/.opendesk/memory`. Nothing is uploaded.
 
 ```bash
 npx opendesk-js memory start              # foreground, Ctrl-C to stop
 npx opendesk-js memory install-service    # or: run at login (launchd / systemd --user / Task Scheduler)
 npx opendesk-js memory status
+npx opendesk-js memory export --format html   # decrypted, browsable copy (also json / csv)
 ```
 
 Then ask the agent:
@@ -235,6 +236,7 @@ moment.attachments[0]            // { mediaType: "image/jpeg", content: Buffer }
 await client.memoryManage({ action: "pause", duration: "1h" });
 await client.memoryManage({ action: "deny", denyAdd: "bank" });
 await client.memoryManage({ action: "config", storageCapMb: 512, retentionDays: 14 });
+await client.memoryManage({ action: "export", format: "csv", since: "last week", path: "./memory-export" });
 ```
 
 - **Per-app deny list** — matched against app name *and* window title; password managers are excluded by default. `opendesk-js memory deny add "bank"`.

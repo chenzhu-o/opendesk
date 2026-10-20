@@ -451,7 +451,7 @@ describe("MemoryTool", () => {
     const enumOf = (name: string) =>
       (reg.get(name).schema as { properties: { action: { enum: string[] } } }).properties.action.enum;
     expect(new Set(enumOf("memory"))).toEqual(new Set(["search", "show", "timeline", "status"]));
-    expect(new Set(enumOf("memory_manage"))).toEqual(new Set(["pause", "resume", "deny", "config", "delete"]));
+    expect(new Set(enumOf("memory_manage"))).toEqual(new Set(["pause", "resume", "deny", "config", "delete", "export"]));
     expect(reg.get("memory").annotations?.readOnlyHint).toBe(true);
     expect(reg.get("memory_manage").annotations?.destructiveHint).toBe(true);
     const r = await new MemoryTool().execute(ctx(home), { action: "delete", app: "chrome", confirm: true });
@@ -985,5 +985,92 @@ describe("MemoryManageTool privacy config", () => {
     const st = await new MemoryTool().execute(ctx(home), { action: "status" });
     expect(st.output).toContain("trigger:   interval");
     expect(st.output).toContain("encrypt:");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+import { exportMemory } from "../src/memory/export.js";
+
+describe("exportMemory", () => {
+  it("writes JSON oldest-first with decrypted thumbnails", () => {
+    seeded(home).close();
+    const out = path.join(home, "exp");
+    const res = exportMemory(out, { home });
+    expect([res.frames, res.thumbnails, res.missingThumbnails]).toEqual([5, 4, 0]);
+    const rows = JSON.parse(fs.readFileSync(path.join(out, "frames.json"), "utf8")).frames;
+    expect(rows[0].app).toBe("Terminal");
+    expect(rows[rows.length - 1].app).toBe("Slack");
+    expect(rows[0].thumbnail).toBe(`thumbs/${rows[0].id}.jpg`);
+    expect(fs.readFileSync(path.join(out, rows[0].thumbnail)).toString()).toBe("jpg1");
+    expect(rows[rows.length - 1].thumbnail).toBeNull();
+  });
+
+  it("filters by app, query and time; writes CSV", () => {
+    seeded(home).close();
+    let res = exportMemory(path.join(home, "a"), { home, format: "csv", app: "chrome", thumbnails: false });
+    const csv = fs.readFileSync(path.join(home, "a", "frames.csv"), "utf8");
+    expect(res.frames).toBe(2);
+    expect(csv.split("\r\n")[0]).toBe("id,when,ts,app,title,text_source,thumbnail,text");
+    expect(fs.existsSync(path.join(home, "a", "thumbs"))).toBe(false);
+    res = exportMemory(path.join(home, "b"), { home, format: "csv", query: "invoice" });
+    expect(res.frames).toBe(1);
+    expect(fs.readFileSync(path.join(home, "b", "frames.csv"), "utf8")).toContain('"Invoice INV-2026-0042 total $1,234.00"');
+    res = exportMemory(path.join(home, "c"), { home, start: ts(1, 0) });
+    expect(res.frames).toBe(3);
+  });
+
+  it("escapes HTML", () => {
+    const s = new MemoryStore(home);
+    s.add({ ts: ts(0), app: "Notes", title: "<script>alert(1)</script>", text: "a < b & c", thumb: Buffer.from("jpg") });
+    s.close();
+    const res = exportMemory(path.join(home, "h"), { home, format: "html" });
+    const page = fs.readFileSync(res.file, "utf8");
+    expect(path.basename(res.file)).toBe("index.html");
+    expect(page).not.toContain("<script>alert(1)</script>");
+    expect(page).toContain("&lt;script&gt;");
+    expect(page).toContain("a &lt; b &amp; c");
+    expect(page).toContain('src="thumbs/1.jpg"');
+  });
+
+  it("refuses a non-empty target and a bad format", () => {
+    seeded(home).close();
+    const busy = path.join(home, "busy");
+    fs.mkdirSync(busy);
+    fs.writeFileSync(path.join(busy, "x"), "keep");
+    expect(() => exportMemory(busy, { home })).toThrow(/not an empty folder/);
+    expect(fs.readFileSync(path.join(busy, "x"), "utf8")).toBe("keep");
+    expect(() => exportMemory(path.join(home, "f"), { home, format: "xml" as never })).toThrow(/format/);
+  });
+
+  it("flags encrypted text it cannot decrypt", () => {
+    const s = new MemoryStore(home, { encryptText: true });
+    s.add({ ts: ts(0), app: "A", text: "secret plans", thumb: Buffer.from("jpg") });
+    s.close();
+    keyProvider = new StaticKeyProvider(null as never);
+    const res = exportMemory(path.join(home, "e"), { home });
+    expect(res.unreadableText).toBe(1);
+    expect(res.missingThumbnails).toBe(1);
+    expect(fs.readFileSync(path.join(home, "e", "frames.json"), "utf8")).not.toContain("secret");
+  });
+
+  it("is available as memory_manage action=export", async () => {
+    seeded(home).close();
+    const out = path.join(home, "tool-exp");
+    const tool = new MemoryManageTool();
+    const day = (n: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + n);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    let r = await tool.execute(ctx(home), { action: "export", path: out, format: "html", since: day(-1), until: day(1) });
+    expect(r.error, r.output).toBeFalsy();
+    expect(r.metadata?.frames).toBe(3);
+    expect(fs.existsSync(path.join(out, "index.html"))).toBe(true);
+    r = await tool.execute(ctx(home), { action: "export", path: out });
+    expect(r.error).toBe(true);
+    expect(r.output).toMatch(/not an empty folder/);
   });
 });

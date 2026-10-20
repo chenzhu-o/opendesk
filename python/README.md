@@ -88,7 +88,7 @@ The `core` and `mcp` extras from earlier versions still work; they are now part 
 | `schedule` | Run any task on a timer |
 | `audit` | Show the session audit log in any MCP session |
 | `memory` | Search the local screen memory (read-only) |
-| `memory_manage` | Pause capture, edit the deny list, delete history |
+| `memory_manage` | Pause capture, edit the deny list, delete or export history (`opendesk memory export --format html`) |
 
 Over MCP every tool has a `title` and `readOnlyHint` / `destructiveHint` annotations, failures return `isError: true`, and the server sends `instructions` describing the recommended workflow.
 

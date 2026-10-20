@@ -173,6 +173,7 @@ class TestClassify:
         ("memory", {"action": "show"}, "low"),
         ("memory", {"action": "delete"}, "high"),
         ("memory_manage", {"action": "delete"}, "high"),
+        ("memory_manage", {"action": "export"}, "high"),
         ("memory_manage", {"action": "pause"}, "medium"),
         ("learn", {"action": "run"}, "medium"),
         ("learn", {"action": "compile"}, "medium"),

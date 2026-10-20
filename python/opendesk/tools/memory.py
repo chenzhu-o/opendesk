@@ -8,7 +8,7 @@ treat them differently:
 * :class:`MemoryTool` (``memory``) — **read-only**: search / show /
   timeline / status.
 * :class:`MemoryManageTool` (``memory_manage``) — control actions that
-  change state: pause / resume / deny list / config / delete.
+  change state: pause / resume / deny list / config / delete / export.
 
 Both always talk to the *local* index — screen memory never leaves the
 machine it was recorded on, so they are intentionally not peer-routable.
@@ -471,7 +471,7 @@ class MemoryTool(_MemoryToolBase):
 
 
 class MemoryManageTool(_MemoryToolBase):
-    """State-changing controls for screen memory (pause, deny list, config, delete)."""
+    """State-changing controls for screen memory (pause, deny list, config, delete, export)."""
 
     name = "memory_manage"
     title = "Manage Screen Memory"
@@ -490,12 +490,15 @@ class MemoryManageTool(_MemoryToolBase):
         "trigger (events|interval), redact, encrypt_text, encrypt_thumbnails; "
         "with none, shows the config.\n"
         "  delete   — remove stored moments for a time range and/or app. Dry run "
-        "unless confirm=true.\n\n"
+        "unless confirm=true.\n"
+        "  export   — write moments (decrypted text + thumbnails) to a folder as "
+        "json, csv or html; filter with since/until/app/query. Only when the user "
+        "asks for an export: the files contain their screen history in plain form.\n\n"
         + _TIME_PHRASES
     )
 
     class Params(Tool.Params):
-        action: Literal["pause", "resume", "deny", "config", "delete"] = Field(
+        action: Literal["pause", "resume", "deny", "config", "delete", "export"] = Field(
             description="What to do. See tool description.",
         )
         duration: Optional[str] = Field(
@@ -533,19 +536,36 @@ class MemoryManageTool(_MemoryToolBase):
         )
         since: Optional[str] = Field(
             default=None,
-            description="For action=delete: start of the time window ('2h', 'yesterday', ISO date).",
+            description="For action=delete/export: start of the time window ('2h', 'yesterday', ISO date).",
         )
         until: Optional[str] = Field(
             default=None,
-            description="For action=delete: end of the time window (same formats as since).",
+            description="For action=delete/export: end of the time window (same formats as since).",
         )
         app: Optional[str] = Field(
             default=None,
-            description="For action=delete: only moments whose app name or window title contains this.",
+            description="For action=delete/export: only moments whose app name or window title contains this.",
         )
         confirm: bool = Field(
             default=False,
             description="For action=delete: must be true to actually delete.",
+        )
+        path: Optional[str] = Field(
+            default=None,
+            description=(
+                "For action=export: new or empty folder to write to. "
+                "Default ~/Downloads/opendesk-memory-<time>."
+            ),
+        )
+        format: Literal["json", "csv", "html"] = Field(
+            default="json",
+            description="For action=export: json, csv, or html (a browsable page).",
+        )
+        query: Optional[str] = Field(
+            default=None, description="For action=export: only moments matching this search.",
+        )
+        thumbnails: bool = Field(
+            default=True, description="For action=export: include decrypted JPEG thumbnails.",
         )
 
     def _dispatch(self, action: str, home: Optional[Path], params: Any) -> Optional[ToolResult]:
@@ -559,4 +579,25 @@ class MemoryManageTool(_MemoryToolBase):
             return self._config(home, params)
         if action == "delete":
             return self._delete(home, params)
+        if action == "export":
+            return self._export(home, params)
         return None
+
+    def _export(self, home: Optional[Path], p: Any) -> ToolResult:
+        from opendesk.memory.export import export_memory
+        from opendesk.memory.timeparse import fmt_range, parse_range
+
+        start, end = parse_range(p.since, p.until)
+        res = export_memory(
+            Path(p.path) if p.path else None, home=home, fmt=p.format,
+            start=start, end=end, app=p.app, query=p.query, thumbnails=p.thumbnails,
+        )
+        scope = fmt_range(start, end) + (f", app~{p.app!r}" if p.app else "")
+        if p.query:
+            scope += f", matching {p.query!r}"
+        lines = [f"Exported {res.frames} moment(s) ({scope}) to {res.file}"]
+        if p.thumbnails:
+            lines.append(f"{res.thumbnails} thumbnail(s) in {res.path / 'thumbs'}")
+        lines += res.warnings
+        lines.append("The export is decrypted; it contains the user's screen history in plain form.")
+        return ToolResult(title="Memory exported", output="\n".join(lines), metadata=res.to_dict())

@@ -109,7 +109,7 @@ _TABLE: dict[str, tuple[dict[str, RiskLevel], RiskLevel]] = {
                  "eval": _H, "evaluate": _H, "js": _H}, _M),
     "memory": ({"search": _L, "show": _L, "timeline": _L, "status": _L,
                 "recall": _L, "delete": _H, "clear": _H}, _M),
-    "memory_manage": ({"status": _L, "list": _L, "delete": _H, "clear": _H}, _M),
+    "memory_manage": ({"status": _L, "list": _L, "delete": _H, "clear": _H, "export": _H}, _M),
     "fs": ({"read": _L, "list": _L, "stat": _L, "delete": _H}, _M),
     # Session admin tools exposed by the MCP server.
     "opendesk_peers": ({}, _L),

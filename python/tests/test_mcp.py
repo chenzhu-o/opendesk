@@ -409,7 +409,7 @@ class TestToolMetadata:
             "search", "show", "timeline", "status",
         }
         assert set(by_name["memory_manage"].schema["properties"]["action"]["enum"]) == {
-            "pause", "resume", "deny", "config", "delete",
+            "pause", "resume", "deny", "config", "delete", "export",
         }
         assert "peer" not in by_name["memory_manage"].schema["properties"]
 

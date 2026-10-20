@@ -24,12 +24,14 @@ from opendesk.memory.config import (
     set_pause,
 )
 from opendesk.memory.crypto import MemoryCipher, load_or_create_key, read_keyinfo
+from opendesk.memory.export import ExportResult, export_memory
 from opendesk.memory.recorder import FrontmostInfo, ScreenMemoryRecorder, start_daemon
 from opendesk.memory.redact import redact, redact_text
 from opendesk.memory.store import TEXT_SOURCES, Frame, MemoryStore, StoreStats
 from opendesk.memory.timeparse import parse_range, parse_when
 
 __all__ = [
+    "ExportResult",
     "Frame",
     "FrontmostInfo",
     "MemoryCipher",
@@ -40,6 +42,7 @@ __all__ = [
     "TEXT_SOURCES",
     "clear_pause",
     "daemon_alive",
+    "export_memory",
     "get_pause",
     "is_paused",
     "load_config",
