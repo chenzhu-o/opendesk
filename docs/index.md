@@ -64,6 +64,8 @@ tools/memory
 tools/script
 tools/browser
 tools/fleet
+tools/reward
+tools/diagnose
 ```
 
 ```{toctree}
@@ -92,6 +94,7 @@ automation/compiled-replay
 architecture/index
 architecture/layers
 architecture/accessibility
+architecture/learning
 architecture/protocol-layer
 architecture/remote-layer
 architecture/data-flow

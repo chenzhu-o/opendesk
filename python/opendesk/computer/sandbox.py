@@ -46,6 +46,18 @@ class ActionType(str, Enum):
     CLIPBOARD_WRITE = "clipboard_write"
     OCR = "ocr"
     UI_ACTION = "ui_action"
+    #: Process diagnosis (`diagnose` tool)
+    DIAGNOSE = "diagnose"
+    #: Verifiable rewards and episode bookkeeping (`reward` tool).  These are
+    #: journal entries rather than agent steps: they *score* a run, so a step
+    #: walk must not count them as things the agent did.
+    EPISODE_BEGIN = "episode_begin"
+    EPISODE_END = "episode_end"
+    REWARD_CHECK = "reward_check"
+    ASSERTION = "assertion"
+    ASSERTIONS = "assertions"
+    GOAL_CAPTURE = "goal_capture"
+    GOAL_SCORE = "goal_score"
     SCRIPT = "script"
     BROWSER = "browser"
     FLEET = "fleet"
@@ -63,6 +75,11 @@ class AuditEntry:
     result: str | None = None
     error: str | None = None
     replay_params: dict[str, Any] | None = None
+    #: Fingerprint of the screen this action was issued against.  Lets callers
+    #: reconstruct which actions happened on the same functional screen — the
+    #: input to state-transition diagnosis.  ``None`` when no screenshot had
+    #: been taken yet.
+    screen: str | None = None
     #: Content digest of the accessibility tree this action was issued against
     #: (see :func:`opendesk.computer.a11y.content_hash`).  The perceptual
     #: ``screen`` fingerprint groups states by *layout*, so a single edited glyph
@@ -83,6 +100,8 @@ class AuditEntry:
         }
         if self.replay_params is not None:
             d["replay_params"] = self.replay_params
+        if self.screen is not None:
+            d["screen"] = self.screen
         if self.ui is not None:
             d["ui"] = self.ui
         return d
@@ -112,6 +131,9 @@ class ComputerSandbox:
     allowed_apps: list[str] = field(default_factory=list)
     screen_region: tuple[int, int, int, int] | None = None
     last_screenshot: bytes | None = field(default=None, repr=False)
+    #: Fingerprint of the most recent screenshot.  Each recorded action captures
+    #: this value so the audit log can be grouped by functional screen.
+    current_screen: str | None = None
     #: Content digest of the most recent accessibility tree read.  Captured onto
     #: each action so the audit log can be grouped by semantic content, which
     #: distinguishes content edits that look identical in pixels.
@@ -151,6 +173,7 @@ class ComputerSandbox:
             result=result,
             error=error,
             replay_params=replay_params,
+            screen=self.current_screen,
             ui=self.current_ui,
         )
         async with self._lock:
